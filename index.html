@@ -611,6 +611,78 @@
             }
         }
 
+        /* PROMPTS SUGERIDOS (nuevo) */
+        .prompt-shelf {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            padding: 14px 16px;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(139, 95, 191, 0.15);
+            border-radius: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .prompt-shelf-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--warm-gray);
+            font-size: 0.95em;
+            font-weight: 600;
+        }
+
+        .prompt-chip-wrap {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .prompt-chip {
+            user-select: none;
+            padding: 10px 14px;
+            border-radius: 9999px;
+            border: 1px solid rgba(139,95,191,0.25);
+            background: linear-gradient(135deg, #ffffff, #f9f2fb);
+            box-shadow: 0 4px 14px rgba(139,95,191,0.08);
+            color: var(--charcoal);
+            font-size: 0.92em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform .15s ease, box-shadow .2s ease, background .2s ease;
+            white-space: nowrap;
+        }
+
+        .prompt-chip:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(139,95,191,0.18);
+            background: linear-gradient(135deg, #fff, #f4e7fb);
+        }
+
+        .prompt-chip.primary {
+            background: linear-gradient(135deg, var(--primary-purple), var(--dark-purple));
+            color: #fff;
+            border-color: transparent;
+        }
+
+        .prompt-chip.ghost {
+            background: rgba(139,95,191,0.08);
+        }
+
+        .prompt-category {
+            margin-left: auto;
+            padding: 6px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(139,95,191,0.25);
+            background: rgba(255,255,255,0.8);
+            color: var(--primary-purple);
+            font-weight: 600;
+            cursor: pointer;
+        }
+
         /* Responsive Design */
         @media (max-width: 1200px) {
             .assistant-panel {
@@ -735,9 +807,27 @@
         </div>
         
         <div class="chat-content" id="chatContent">
+            <!-- PROMPTS SUGERIDOS (nuevo) -->
+            <div class="prompt-shelf" id="promptShelf" aria-label="Sugerencias de prompts">
+                <div class="prompt-shelf-header">
+                    <span>✨ Sugerencias rápidas</span>
+                    <select id="promptCategory" class="prompt-category" title="Filtrar sugerencias">
+                        <option value="Todos">Todos</option>
+                        <option value="Básicos">Básicos</option>
+                        <option value="Confirmaciones">Confirmaciones</option>
+                        <option value="Mesas">Mesas</option>
+                        <option value="QR y Boletos">QR y Boletos</option>
+                        <option value="Contacto">Contacto</option>
+                        <option value="Fichas">Fichas</option>
+                        <option value="Combinados">Combinados</option>
+                    </select>
+                </div>
+                <div class="prompt-chip-wrap" id="promptChips"></div>
+            </div>
+
             <div class="chat-welcome">
                 <p>¡Bienvenido! 👋</p>
-                <p>Presiona "Hacer Consulta" o haz clic en la pareja para comenzar a planificar tu boda perfecta.</p>
+                <p>Presiona "Hacer Consulta", toca la pareja o elige una sugerencia para empezar.</p>
             </div>
             
             <!-- Indicador de escritura -->
@@ -756,14 +846,62 @@
             constructor() {
                 this.isListening = false;
                 this.isProcessing = false;
-                this.apiUrl = 'http://127.0.0.1:8000';
+                this.apiUrl = 'http://127.0.0.1:8001';
                 this.conversationHistory = [];
                 
+                // Prompts sugeridos por categoría (nuevo)
+                this.PROMPTS = {
+                    "Básicos": [
+                        "lista de invitados",
+                        "¿cuántos confirmados?",
+                        "sin mesa",
+                        "mesas (por mesa)",
+                        "boletos"
+                    ],
+                    "Confirmaciones": [
+                        "confirmados",
+                        "quiénes asistirán",
+                        "confirmados de la mesa 12",
+                        "solo misa"
+                    ],
+                    "Mesas": [
+                        "invitados de la mesa 12",
+                        "invitados de la mesa 7",
+                        "sin mesa",
+                        "confirmados de la mesa 5"
+                    ],
+                    "QR y Boletos": [
+                        "QR enviados",
+                        "QR confirmados",
+                        "boletos confirmados",
+                        "¿cuántos boletos faltan?"
+                    ],
+                    "Contacto": [
+                        "teléfono de Carmen Chávez",
+                        "correo de Farah",
+                        "gmail.com",
+                        "tel 33"
+                    ],
+                    "Fichas": [
+                        "ficha de Araceli Figueroa",
+                        "ficha de Enrique Chávez",
+                        "ficha de Karla Calleros"
+                    ],
+                    "Combinados": [
+                        "confirmados con QR enviado",
+                        "sin mesa y correo gmail",
+                        "confirmados de mesa 12 con QR confirmado"
+                    ],
+                    "Todos": [] // se rellena dinámicamente
+                };
+
                 this.initializeElements();
                 this.setupEventListeners();
                 this.initializeAnimations();
                 this.setupSpeechRecognition();
                 this.startAmbientEffects();
+                this.prepareAllPrompts(); // nuevo
+                this.renderPromptChips(); // nuevo
             }
 
             initializeElements() {
@@ -773,6 +911,11 @@
                 this.statusDisplay = document.getElementById('statusDisplay');
                 this.chatContent = document.getElementById('chatContent');
                 this.typingIndicator = document.getElementById('typingIndicator');
+
+                // elementos de prompts (nuevo)
+                this.promptShelf = document.getElementById('promptShelf');
+                this.promptChips = document.getElementById('promptChips');
+                this.promptCategory = document.getElementById('promptCategory');
             }
 
             setupEventListeners() {
@@ -792,6 +935,68 @@
                         this.couple3D.style.filter = '';
                     }
                 });
+
+                // Click en chips de prompts (nuevo)
+                this.promptChips.addEventListener('click', (e) => {
+                    const chip = e.target.closest('.prompt-chip');
+                    if (!chip) return;
+                    const text = chip.getAttribute('data-prompt');
+                    if (text) {
+                        this.removeWelcomeMessage();
+                        this.addUserMessage(text);
+                        this.processUserQuery(text);
+                    }
+                });
+
+                // Cambio de categoría (nuevo)
+                this.promptCategory.addEventListener('change', () => {
+                    this.renderPromptChips(this.promptCategory.value);
+                });
+            }
+
+            // Rellena "Todos" con la unión de categorías (nuevo)
+            prepareAllPrompts() {
+                const all = new Set();
+                Object.keys(this.PROMPTS).forEach(cat => {
+                    if (cat !== "Todos") {
+                        this.PROMPTS[cat].forEach(p => all.add(p));
+                    }
+                });
+                this.PROMPTS["Todos"] = Array.from(all);
+            }
+
+            // Pintar chips según categoría (nuevo)
+            renderPromptChips(category = "Todos") {
+                const items = (this.PROMPTS[category] || []).slice(0, 24);
+                this.promptChips.innerHTML = "";
+
+                const primarySet = new Set([
+                    "lista de invitados", "¿cuántos confirmados?",
+                    "invitados de la mesa 12", "confirmados", "QR confirmados", "boletos"
+                ]);
+
+                items.forEach(text => {
+                    const chip = document.createElement('button');
+                    chip.className = 'prompt-chip' + (primarySet.has(text) ? ' primary' : '');
+                    chip.textContent = this.decoratePrompt(text);
+                    chip.setAttribute('data-prompt', text);
+                    chip.title = text;
+                    this.promptChips.appendChild(chip);
+                });
+            }
+
+            // Le meto algunos emojis sutiles a los chips (nuevo)
+            decoratePrompt(text) {
+                const t = text.toLowerCase();
+                if (t.includes('mesa')) return `🍽️ ${text}`;
+                if (t.includes('confirm')) return `✅ ${text}`;
+                if (t.includes('qr')) return `🔳 ${text}`;
+                if (t.includes('bolet')) return `🎟️ ${text}`;
+                if (t.includes('tel')) return `📞 ${text}`;
+                if (t.includes('correo') || t.includes('gmail')) return `📧 ${text}`;
+                if (t.includes('ficha')) return `🪪 ${text}`;
+                if (t.includes('lista')) return `📝 ${text}`;
+                return `✨ ${text}`;
             }
 
             setupSpeechRecognition() {
@@ -923,14 +1128,13 @@
                 const messageDiv = document.createElement('div');
                 messageDiv.className = 'message user';
                 messageDiv.innerHTML = `
-                    <div class="message-content">${text}</div>
+                    <div class="message-content">${this.escapeHtml(text)}</div>
                     <div class="message-time">${this.getCurrentTime()}</div>
                 `;
                 
                 this.chatContent.insertBefore(messageDiv, this.typingIndicator);
                 this.scrollToBottom();
                 
-                // Guardar en historial
                 this.conversationHistory.push({
                     type: 'user',
                     content: text,
@@ -951,7 +1155,6 @@
                 this.chatContent.insertBefore(messageDiv, this.typingIndicator);
                 this.scrollToBottom();
                 
-                // Guardar en historial
                 this.conversationHistory.push({
                     type: 'assistant',
                     content: text,
@@ -988,7 +1191,7 @@
                     .replace(/•/g, '<span style="color: var(--primary-purple); font-weight: bold;">•</span>')
                     .replace(/(\d+\.)/g, '<span style="color: var(--primary-purple); font-weight: 600;">$1</span>')
                     .replace(/(\$[\d,]+)/g, '<span style="color: var(--success-green); font-weight: 600;">$1</span>')
-                    .replace(/(📞|📧|💰|🕐|👤|💍|💐|🌸)/g, '<span style="font-size: 1.1em;">$1</span>')
+                    .replace(/(📞|📧|💰|🕐|👤|💍|💐|🌸|🔳|🎟️|🍽️|🪪|📝)/g, '<span style="font-size: 1.1em;">$1</span>')
                     .replace(/\n/g, '<br>');
             }
 
@@ -1027,7 +1230,6 @@
                 this.clearProcessingState();
                 this.hideTypingIndicator();
                 
-                // Auto-limpiar error después de 5 segundos
                 setTimeout(() => {
                     if (this.statusDisplay.classList.contains('error')) {
                         this.updateStatus('✨ Listo para ayudarte con tu boda soñada', '');
@@ -1068,8 +1270,6 @@
                             `✅ Conectado - ${data.tables_count || 0} fuentes de datos`, 
                             'processing'
                         );
-                        
-                        // Añadir mensaje de sistema al chat
                         this.addSystemMessage(`Sistema conectado correctamente. ${data.tables_count || 0} fuentes de datos disponibles.`);
                     } else {
                         this.updateStatus('⚠️ API responde con errores', 'error');
@@ -1085,7 +1285,7 @@
                 messageDiv.style.opacity = '0.8';
                 messageDiv.style.fontSize = '0.9em';
                 messageDiv.innerHTML = `
-                    <div class="message-content">🔧 <em>${text}</em></div>
+                    <div class="message-content">🔧 <em>${this.escapeHtml(text)}</em></div>
                     <div class="message-time">${this.getCurrentTime()}</div>
                 `;
                 
@@ -1113,10 +1313,7 @@
             }
 
             startAmbientEffects() {
-                // Crear elementos flotantes románticos
                 setInterval(() => this.createFloatingHeart(), 5000);
-                
-                // Crear algunos elementos iniciales
                 for (let i = 0; i < 2; i++) {
                     setTimeout(() => this.createFloatingHeart(), i * 2000);
                 }
@@ -1152,7 +1349,6 @@
                 const messages = this.chatContent.querySelectorAll('.message');
                 messages.forEach(message => message.remove());
                 
-                // Restaurar mensaje de bienvenida
                 const welcomeDiv = document.createElement('div');
                 welcomeDiv.className = 'chat-welcome';
                 welcomeDiv.innerHTML = `
@@ -1186,17 +1382,13 @@
             }
 
             initialize() {
-                // Probar conexión API al inicio
                 this.testApiConnection();
-                
-                // Mensaje de bienvenida después de un momento
                 setTimeout(() => {
                     if (!this.isListening && !this.isProcessing) {
                         this.updateStatus('💬 Haz clic en "Hacer Consulta" para comenzar', '');
                     }
                 }, 3000);
                 
-                // Limpiar bienvenida inicial después del primer mensaje
                 this.originalWelcome = this.chatContent.querySelector('.chat-welcome');
             }
 
@@ -1206,6 +1398,13 @@
                     this.originalWelcome = null;
                 }
             }
+
+            // Utils
+            escapeHtml(str) {
+                return (str || '').replace(/[&<>"']/g, m => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                }[m]));
+            }
         }
 
         // Inicialización
@@ -1213,21 +1412,18 @@
             const chatBot = new PremiumWeddingChatBot();
             chatBot.initialize();
             
-            // Configurar voces para síntesis
             if ('speechSynthesis' in window) {
                 speechSynthesis.addEventListener('voiceschanged', () => {
                     console.log('Voces disponibles:', speechSynthesis.getVoices().length);
                 });
             }
             
-            // Limpiar recursos al cerrar
             window.addEventListener('beforeunload', () => {
                 if ('speechSynthesis' in window) {
                     speechSynthesis.cancel();
                 }
             });
             
-            // Gestión de visibilidad
             document.addEventListener('visibilitychange', () => {
                 if (document.hidden && 'speechSynthesis' in window) {
                     speechSynthesis.pause();
@@ -1236,7 +1432,6 @@
                 }
             });
 
-            // Override del primer mensaje para limpiar bienvenida
             const originalAddUserMessage = chatBot.addUserMessage;
             chatBot.addUserMessage = function(text) {
                 this.removeWelcomeMessage();

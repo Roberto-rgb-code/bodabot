@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union
 from collections import defaultdict, Counter
 from datetime import datetime
-import pandas as pd
 from fuzzywuzzy import fuzz
 import requests
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Header
@@ -46,7 +45,7 @@ from google.cloud import texttospeech
 # =========================
 # FastAPI
 # =========================
-app = FastAPI(title="BodaBot API (JSON + Google NLP + Voz)", version="3.4-wedding-enhanced")
+app = FastAPI(title="BodaBot API (Invitados & Anfitrión)", version="4.5-invitados-anfitrion")
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,247 +65,18 @@ SCHEMA: Dict[str, List[Dict[str, str]]] = {}
 SESSIONS: Dict[str, Dict[str, Any]] = defaultdict(dict)
 DEFAULT_SESSION = "default"
 
-WORD_RE = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+")
-DATE_RE = re.compile(r"(\d{1,2})\s*(?:de)?\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s*(?:de)?\s*(\d{4})?", flags=re.IGNORECASE)
+WORD_RE = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9@._+-]+")
+DATE_RE = re.compile(
+    r"(\d{1,2})\s*(?:de)?\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s*(?:de)?\s*(\d{4})?",
+    flags=re.IGNORECASE
+)
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+DIGITS_RE = re.compile(r"\d+")
 
 # =========================
-# Schema for validation (from dbbodas.xlsx)
+# Schema: SOLO tblInvitados
 # =========================
 SCHEMA_DEF = {
-    "tblCategoriasProveedores": [
-        {"column_name": "idCategoriaProveedor", "data_type": "int"},
-        {"column_name": "nombreCategoria", "data_type": "varchar"},
-        {"column_name": "descripcion", "data_type": "text"},
-    ],
-    "tblDieteticas": [
-        {"column_name": "idDietetica", "data_type": "int"},
-        {"column_name": "nomDietetica", "data_type": "varchar"},
-    ],
-    "tblEmpresasOrganizadores": [
-        {"column_name": "idEmpresaOrganizador", "data_type": "int"},
-        {"column_name": "nombreEmpresa", "data_type": "varchar"},
-        {"column_name": "direccion", "data_type": "varchar"},
-        {"column_name": "idEstado", "data_type": "int"},
-        {"column_name": "idMunicipio", "data_type": "int"},
-        {"column_name": "telefono", "data_type": "varchar"},
-        {"column_name": "paginaWeb", "data_type": "varchar"},
-    ],
-    "tblEstados": [
-        {"column_name": "idEstado", "data_type": "int"},
-        {"column_name": "nombreEstado", "data_type": "varchar"},
-    ],
-    "tblItinerarios": [
-        {"column_name": "idItinerario", "data_type": "int"},
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "horaInicio", "data_type": "date"},
-        {"column_name": "horaFin", "data_type": "date"},
-        {"column_name": "actividad", "data_type": "varchar"},
-        {"column_name": "responsables", "data_type": "varchar"},
-    ],
-    "tblMensajesProveedores": [
-        {"column_name": "idMensajeProveedor", "data_type": "int"},
-        {"column_name": "idProveedor", "data_type": "int"},
-        {"column_name": "tituloMensaje", "data_type": "varchar"},
-        {"column_name": "Mensaje", "data_type": "varchar"},
-    ],
-    "tblMunicipios": [
-        {"column_name": "idMunicipio", "data_type": "int"},
-        {"column_name": "nombreMunicipio", "data_type": "varchar"},
-        {"column_name": "idEstado", "data_type": "int"},
-    ],
-    "tblOfertasProveedores": [
-        {"column_name": "idOfertaProveedor", "data_type": "int"},
-        {"column_name": "oferta", "data_type": "decimal"},
-        {"column_name": "estatus", "data_type": "bit"},
-    ],
-    "tblOrganizadoresBodas": [
-        {"column_name": "idOrganizadorBoda", "data_type": "int"},
-        {"column_name": "idEmpresaOrganizador", "data_type": "int"},
-        {"column_name": "nombreOrganizador", "data_type": "varchar"},
-        {"column_name": "email", "data_type": "varchar"},
-        {"column_name": "tel", "data_type": "varchar"},
-        {"column_name": "activo", "data_type": "bit"},
-        {"column_name": "idUsuario", "data_type": "int"},
-        {"column_name": "Password", "data_type": "varchar"},
-        {"column_name": "usuarioID", "data_type": "int"},
-    ],
-    "tblPreguntasProveedores": [
-        {"column_name": "idPreguntaProveedor", "data_type": "int"},
-        {"column_name": "Pregunta", "data_type": "varchar"},
-    ],
-    "tblPresupuestos": [
-        {"column_name": "idPresupuesto", "data_type": "int"},
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "idServicioCategoProv", "data_type": "int"},
-        {"column_name": "costo", "data_type": "decimal"},
-        {"column_name": "fechaPago", "data_type": "date"},
-        {"column_name": "idStatusPago", "data_type": "int"},
-        {"column_name": "descripcion", "data_type": "varchar"},
-        {"column_name": "observaciones", "data_type": "varchar"},
-        {"column_name": "idProductoProveedor", "data_type": "int"},
-    ],
-    "tblProductosProveedores": [
-        {"column_name": "idProductoProveedor", "data_type": "int"},
-        {"column_name": "idServicioProveedor", "data_type": "int"},
-        {"column_name": "nombreProducto", "data_type": "varchar"},
-        {"column_name": "precioProducto", "data_type": "decimal"},
-        {"column_name": "descripcion", "data_type": "varchar"},
-    ],
-    "tblProveedores": [
-        {"column_name": "idProveedor", "data_type": "int"},
-        {"column_name": "nomNegocio", "data_type": "varchar"},
-        {"column_name": "idCategoriaProveedor", "data_type": "int"},
-        {"column_name": "sitioWeb", "data_type": "varchar"},
-        {"column_name": "tel", "data_type": "varchar"},
-        {"column_name": "email", "data_type": "varchar"},
-        {"column_name": "codigoPostal", "data_type": "varchar"},
-        {"column_name": "direccion", "data_type": "varchar"},
-        {"column_name": "pais", "data_type": "varchar"},
-        {"column_name": "idEstado", "data_type": "int"},
-        {"column_name": "idMunicipio", "data_type": "int"},
-        {"column_name": "precioInicial", "data_type": "decimal"},
-        {"column_name": "usuarioID", "data_type": "int"},
-        {"column_name": "password", "data_type": "varchar"},
-    ],
-    "tblProveedoresDieteticas": [
-        {"column_name": "idProveedorDietetica", "data_type": "int"},
-        {"column_name": "idDietetica", "data_type": "int"},
-        {"column_name": "idProveedor", "data_type": "int"},
-    ],
-    "tblProveedoresMunicipios": [
-        {"column_name": "idProveedorMunicipio", "data_type": "int"},
-        {"column_name": "idProveedor", "data_type": "int"},
-        {"column_name": "idMunicipio", "data_type": "int"},
-    ],
-    "tblRedesProveedores": [
-        {"column_name": "idRedProveedor", "data_type": "int"},
-        {"column_name": "idRedSocial", "data_type": "int"},
-        {"column_name": "idProveedor", "data_type": "int"},
-        {"column_name": "link", "data_type": "varchar"},
-    ],
-    "tblRedesSociales": [
-        {"column_name": "idRedSocial", "data_type": "int"},
-        {"column_name": "redSocial", "data_type": "varchar"},
-        {"column_name": "estatus", "data_type": "bit"},
-    ],
-    "tblRespuestasProveedores": [
-        {"column_name": "idRespuestaProveedor", "data_type": "int"},
-        {"column_name": "idPreguntaProveedor", "data_type": "int"},
-        {"column_name": "idProveedor", "data_type": "int"},
-        {"column_name": "Respuesta", "data_type": "varchar"},
-    ],
-    "tblSeleccionarOfertas": [
-        {"column_name": "idSeleccionOferta", "data_type": "int"},
-        {"column_name": "idOfertaProveedor", "data_type": "int"},
-        {"column_name": "idProveedor", "data_type": "int"},
-    ],
-    "tblSeleccionarOrganizadoresBodas": [
-        {"column_name": "IdSeleccionarOrganizadorBoda", "data_type": "int"},
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "idOrganizadorBoda", "data_type": "int"},
-    ],
-    "tblServiciosCategoriasProvedores": [
-        {"column_name": "idServicioCategoProv", "data_type": "int"},
-        {"column_name": "idCategoriaProveedor", "data_type": "int"},
-        {"column_name": "serviciosProveedores", "data_type": "varchar"},
-    ],
-    "tblServiciosProveedores": [
-        {"column_name": "idServicioProveedor", "data_type": "int"},
-        {"column_name": "idProveedor", "data_type": "int"},
-        {"column_name": "idServiciosCategoProv", "data_type": "int"},
-    ],
-    "tblStatusPagos": [
-        {"column_name": "idStatusPago", "data_type": "int"},
-        {"column_name": "nomStatus", "data_type": "varchar"},
-    ],
-    "tblTipoUsuarios": [
-        {"column_name": "tipoUsuarioID", "data_type": "int"},
-        {"column_name": "nombreTipoUsuario", "data_type": "nvarchar"},
-    ],
-    "tblUsuarios": [
-        {"column_name": "usuarioID", "data_type": "int"},
-        {"column_name": "nombre", "data_type": "nvarchar"},
-        {"column_name": "email", "data_type": "nvarchar"},
-        {"column_name": "tipoUsuarioID", "data_type": "int"},
-        {"column_name": "password", "data_type": "varchar"},
-    ],
-    "tblAcompanantes": [
-        {"column_name": "idAcompanate", "data_type": "int"},
-        {"column_name": "idInvitado", "data_type": "int"},
-        {"column_name": "acompanante", "data_type": "varchar"},
-        {"column_name": "confirmado", "data_type": "bit"},
-        {"column_name": "mesa", "data_type": "int"},
-    ],
-    "tblBebidas": [
-        {"column_name": "idBebida", "data_type": "int"},
-        {"column_name": "bebida", "data_type": "varchar"},
-    ],
-    "tblBebidasInvitado": [
-        {"column_name": "idBebidaInvitado", "data_type": "int"},
-        {"column_name": "idBebidaNovios", "data_type": "int"},
-        {"column_name": "idInvitado", "data_type": "int"},
-    ],
-    "tblBebidasNovios": [
-        {"column_name": "idBebidaNovios", "data_type": "int"},
-        {"column_name": "idBebida", "data_type": "int"},
-        {"column_name": "idNovios", "data_type": "int"},
-    ],
-    "tblBioNovios": [
-        {"column_name": "idBioNovio", "data_type": "int"},
-        {"column_name": "idGenero", "data_type": "int"},
-        {"column_name": "biografia", "data_type": "text"},
-        {"column_name": "idNovios", "data_type": "int"},
-    ],
-    "tblConfiguracion": [
-        {"column_name": "idConfiguracion", "data_type": "int"},
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "requiereAutenticacion", "data_type": "bit"},
-        {"column_name": "dominioExterno", "data_type": "bit"},
-    ],
-    "tblCuentasCorreo": [
-        {"column_name": "idCuentaCorreo", "data_type": "int"},
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "smtpServidor", "data_type": "varchar"},
-        {"column_name": "usuario", "data_type": "varchar"},
-        {"column_name": "password", "data_type": "varchar"},
-        {"column_name": "port", "data_type": "int"},
-    ],
-    "tblEnviosDiarios": [
-        {"column_name": "idEnvio", "data_type": "int"},
-        {"column_name": "idCuenta", "data_type": "int"},
-        {"column_name": "cantidad", "data_type": "int"},
-        {"column_name": "fecha", "data_type": "datetime"},
-    ],
-    "tblHistoriaNovios": [
-        {"column_name": "idNoviosHistoria", "data_type": "int"},
-        {"column_name": "fechaConocieron", "data_type": "datetime"},
-        {"column_name": "conocieron", "data_type": "text"},
-        {"column_name": "imgConocieron", "data_type": "varchar"},
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "fechaPropuesta", "data_type": "datetime"},
-        {"column_name": "propuesta", "data_type": "text"},
-        {"column_name": "imgPropuesta", "data_type": "varchar"},
-        {"column_name": "fechaPrimeraCita", "data_type": "datetime"},
-        {"column_name": "primeraCita", "data_type": "text"},
-        {"column_name": "imgPrimeraCita", "data_type": "varchar"},
-        {"column_name": "fechaPedida", "data_type": "datetime"},
-        {"column_name": "pedida", "data_type": "text"},
-        {"column_name": "imgPedida", "data_type": "varchar"},
-        {"column_name": "fechaNovios", "data_type": "datetime"},
-        {"column_name": "novios", "data_type": "text"},
-        {"column_name": "imgNovios", "data_type": "varchar"},
-    ],
-    "tblIdioma": [
-        {"column_name": "idIdioma", "data_type": "int"},
-        {"column_name": "idioma", "data_type": "varchar"},
-    ],
-    "tblIntentosIngreso": [
-        {"column_name": "idIntentoIngreso", "data_type": "int"},
-        {"column_name": "usuario", "data_type": "varchar"},
-        {"column_name": "pass", "data_type": "varchar"},
-        {"column_name": "fechaHora", "data_type": "datetime"},
-        {"column_name": "ingreso", "data_type": "bit"},
-    ],
     "tblInvitados": [
         {"column_name": "idInvitado", "data_type": "int"},
         {"column_name": "apodo", "data_type": "varchar"},
@@ -337,133 +107,18 @@ SCHEMA_DEF = {
         {"column_name": "mensajeRegalo", "data_type": "text"},
         {"column_name": "idIdioma", "data_type": "int"},
     ],
-    "tblMensajesWA": [
-        {"column_name": "idMensajeWA", "data_type": "int"},
-        {"column_name": "idTipoInvitado", "data_type": "int"},
-        {"column_name": "idIdioma", "data_type": "int"},
-        {"column_name": "mensajeInicial", "data_type": "varchar"},
-        {"column_name": "mensajeMesaRegalos", "data_type": "varchar"},
-        {"column_name": "mensajeDiaD", "data_type": "varchar"},
-    ],
-    "tblMesasNovios": [
-        {"column_name": "idMesaNovio", "data_type": "int"},
-        {"column_name": "idMesaRegalo", "data_type": "int"},
-        {"column_name": "numero", "data_type": "varchar"},
-        {"column_name": "idNovios", "data_type": "int"},
-    ],
-    "tblMesasRegalos": [
-        {"column_name": "idMesaRegalo", "data_type": "int"},
-        {"column_name": "nombre", "data_type": "varchar"},
-        {"column_name": "url", "data_type": "varchar"},
-        {"column_name": "telefono", "data_type": "varchar"},
-    ],
-    "tblNovios": [
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "nombreNovia", "data_type": "varchar"},
-        {"column_name": "aPNovia", "data_type": "varchar"},
-        {"column_name": "aMNovia", "data_type": "varchar"},
-        {"column_name": "nombreNovio", "data_type": "varchar"},
-        {"column_name": "aPNovio", "data_type": "varchar"},
-        {"column_name": "aMNovio", "data_type": "varchar"},
-        {"column_name": "fechaRegistro", "data_type": "datetime"},
-        {"column_name": "dominio", "data_type": "varchar"},
-        {"column_name": "padrinoNombre", "data_type": "varchar"},
-        {"column_name": "padrinoApellido", "data_type": "varchar"},
-        {"column_name": "madrinaNombre", "data_type": "varchar"},
-        {"column_name": "madrinaApellido", "data_type": "varchar"},
-        {"column_name": "misaLugar", "data_type": "varchar"},
-        {"column_name": "misaHora", "data_type": "varchar"},
-        {"column_name": "misaFecha", "data_type": "date"},
-        {"column_name": "recepcionLugar", "data_type": "varchar"},
-        {"column_name": "recepcionHora", "data_type": "varchar"},
-        {"column_name": "recepcionFecha", "data_type": "date"},
-        {"column_name": "fiestaLugar", "data_type": "varchar"},
-        {"column_name": "fiestaHora", "data_type": "varchar"},
-        {"column_name": "fiestaFecha", "data_type": "date"},
-        {"column_name": "password", "data_type": "varchar"},
-        {"column_name": "correoRegistro", "data_type": "varchar"},
-        {"column_name": "telRegistro", "data_type": "varchar"},
-        {"column_name": "idPlantilla", "data_type": "int"},
-        {"column_name": "activo", "data_type": "bit"},
-        {"column_name": "papaNovioNombre", "data_type": "varchar"},
-        {"column_name": "mamaNovioNombre", "data_type": "varchar"},
-        {"column_name": "papaNoviaNombre", "data_type": "varchar"},
-        {"column_name": "mamaNoviaNombre", "data_type": "varchar"},
-        {"column_name": "facebookNovio", "data_type": "varchar"},
-        {"column_name": "facebookNovia", "data_type": "varchar"},
-        {"column_name": "twitterNovio", "data_type": "varchar"},
-        {"column_name": "twitterNovia", "data_type": "varchar"},
-        {"column_name": "instagramNovio", "data_type": "varchar"},
-        {"column_name": "instagramNovia", "data_type": "varchar"},
-        {"column_name": "validacionCorreo", "data_type": "bit"},
-        {"column_name": "misaLatitud", "data_type": "varchar"},
-        {"column_name": "misaLongitud", "data_type": "varchar"},
-        {"column_name": "recepcionLatitud", "data_type": "varchar"},
-        {"column_name": "recepcionLongitud", "data_type": "varchar"},
-        {"column_name": "fiestaLatitud", "data_type": "varchar"},
-        {"column_name": "fiestaLongitud", "data_type": "varchar"},
-        {"column_name": "dominioExterno", "data_type": "bit"},
-        {"column_name": "usuarioID", "data_type": "int"},
-    ],
-    "tblPlantillaBoletos": [
-        {"column_name": "idPM-boletos", "data_type": "int"},
-        {"column_name": "plantillaBoleto", "data_type": "varchar"},
-        {"column_name": "ancho", "data_type": "decimal"},
-        {"column_name": "alto", "data_type": "decimal"},
-    ],
-    "tblPlantillas": [
-        {"column_name": "idPlantilla", "data_type": "int"},
-        {"column_name": "nombre", "data_type": "varchar"},
-    ],
-    "tblPlantillasNovios": [
-        {"column_name": "idPlantillasNovios", "data_type": "int"},
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "idPM-invitacion", "data_type": "int"},
-        {"column_name": "idPW-invitacion", "data_type": "int"},
-        {"column_name": "idPWA-invitacion", "data_type": "int"},
-        {"column_name": "idPM-boletos", "data_type": "int"},
-        {"column_name": "idPWA-boletos", "data_type": "int"},
-        {"column_name": "idPM-urgente", "data_type": "int"},
-        {"column_name": "idPWA-urgente", "data_type": "int"},
-        {"column_name": "idPM-diaD", "data_type": "int"},
-        {"column_name": "idPWA-diaD", "data_type": "int"},
-    ],
-    "tblTipoInvitado": [
-        {"column_name": "idTipoInvitado", "data_type": "int"},
-        {"column_name": "tipoInvitado", "data_type": "varchar"},
-        {"column_name": "tituloCorreo", "data_type": "varchar"},
-        {"column_name": "descripcion", "data_type": "text"},
-        {"column_name": "archivoBienvenida", "data_type": "varchar"},
-        {"column_name": "idNoviosTI", "data_type": "int"},
-    ],
-    "vwMesasBoletos": [
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "mesa", "data_type": "int"},
-        {"column_name": "boletos", "data_type": "int"},
-        {"column_name": "boletosConfirmados", "data_type": "int"},
-    ],
-    "vwReporteGeneral": [
-        {"column_name": "idNovios", "data_type": "int"},
-        {"column_name": "invitaciones", "data_type": "int"},
-        {"column_name": "boletos", "data_type": "int"},
-        {"column_name": "boletosConfirmados", "data_type": "int"},
-        {"column_name": "accedio", "data_type": "int"},
-        {"column_name": "invitacionEnviada", "data_type": "int"},
-        {"column_name": "SoloMisa", "data_type": "int"},
-        {"column_name": "Asistira", "data_type": "int"},
-        {"column_name": "QREnviado", "data_type": "int"},
-        {"column_name": "QRConfirmado", "data_type": "int"},
-        {"column_name": "asistioBoda", "data_type": "int"},
-    ],
 }
 
+# =========================
+# Utilidades
+# =========================
+CONNECTORS = {"y","o","con","por","para","de","del","la","el","los","las","al","a","en"}
+
 def normalize(s: Optional[str]) -> str:
-    if not s:
+    if s is None:
         return ""
-    s = s.lower().strip()
+    s = str(s).lower().strip()
     s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
-    # Fix common wedding-related typos
-    s = s.replace("fotografos", "fotógrafos").replace("fotograf", "fotógrafos")
     s = s.replace("salon", "salón").replace("invitacion", "invitación")
     return s
 
@@ -484,6 +139,32 @@ def parse_date(text: str) -> Optional[datetime]:
         year = int(match.group(3) or datetime.now().year)
         return datetime(year, month, day)
     return None
+
+def _bit(v: Any) -> int:
+    if v is None:
+        return 0
+    if isinstance(v, bool):
+        return 1 if v else 0
+    try:
+        return 1 if int(v) == 1 else 0
+    except Exception:
+        return 0
+
+def _int(v: Any) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return 0
+
+def _format_phone(val: str) -> str:
+    if not val:
+        return "—"
+    nums = ''.join(DIGITS_RE.findall(val))
+    if len(nums) == 10:
+        return f"{nums[0:2]} {nums[2:6]} {nums[6:10]}"
+    if len(nums) == 12:
+        return f"{nums[0:2]} {nums[2:4]} {nums[4:8]} {nums[8:12]}"
+    return val
 
 def validate_row(row: Dict[str, Any], table_name: str) -> bool:
     if not row or all(v is None for v in row.values()):
@@ -508,8 +189,8 @@ def _register_table(canon: str, rows: List[Any]) -> None:
     cleaned_rows = []
     for row in rows:
         if isinstance(row, dict) and validate_row(row, canon):
-            cleaned_row = {k: v for k, v in row.items() if v is not None}
-            cleaned_rows.append(cleaned_row)
+            cleaned = {k: v for k, v in row.items() if v is not None}
+            cleaned_rows.append(cleaned)
     if cleaned_rows:
         TABLES[canon] = cleaned_rows
         ALIASES[normalize(canon)] = canon
@@ -522,29 +203,35 @@ def _register_table(canon: str, rows: List[Any]) -> None:
         if singular and normalize(singular) not in ALIASES:
             ALIASES[normalize(singular)] = canon
 
-def _walk_and_collect(obj: Any, prefix: str = "") -> None:
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            nxt = f"{prefix}.{k}" if prefix else k
-            if isinstance(v, list):
-                _register_table(nxt, v)
-            else:
-                _walk_and_collect(v, nxt)
-    elif isinstance(obj, list):
-        _register_table(prefix, obj)
-
 def _build_inverted() -> None:
     INVERTED.clear()
     for tname, rows in TABLES.items():
         for i, row in enumerate(rows):
             tokens = set()
             for k, v in row.items():
-                if k in ("nombreCategoria", "nomNegocio", "actividad", "descripcion", "tipoInvitado", "tituloCorreo", "nombreNovia", "nombreNovio", "misaLugar", "recepcionLugar"):
+                if k in ("idInvitado", "apodo", "nombre", "aPaterno", "aMaterno", "correo", "telefono", "mensaje", "mensajeRegalo"):
                     tokens.update(tokenize(v))
                 else:
                     tokens.update(tokenize(v))
             for tok in tokens:
                 INVERTED[tok].append((tname, i))
+
+def _extract_tbl_invitados(obj: Any) -> List[Dict[str, Any]]:
+    if isinstance(obj, dict):
+        if "tblInvitados" in obj and isinstance(obj["tblInvitados"], list):
+            return obj["tblInvitados"]
+        for v in obj.values():
+            res = _extract_tbl_invitados(v)
+            if res:
+                return res
+    elif isinstance(obj, list):
+        if all(isinstance(it, dict) and "idInvitado" in it for it in obj):
+            return obj
+        for it in obj:
+            res = _extract_tbl_invitados(it)
+            if res:
+                return res
+    return []
 
 def load_data() -> None:
     if not DATA_PATH.exists():
@@ -556,8 +243,15 @@ def load_data() -> None:
             raise RuntimeError(f"Error decodificando JSON: {e}")
     TABLES.clear()
     ALIASES.clear()
-    SCHEMA.update(SCHEMA_DEF)
-    _walk_and_collect(data)
+    SCHEMA.clear()
+    SCHEMA["tblInvitados"] = SCHEMA_DEF["tblInvitados"]
+
+    if isinstance(data, dict) and isinstance(data.get("tblInvitados"), list):
+        invitados_data = data["tblInvitados"]
+    else:
+        invitados_data = _extract_tbl_invitados(data)
+
+    _register_table("tblInvitados", invitados_data or [])
     _build_inverted()
 
 # Carga inicial
@@ -576,66 +270,35 @@ def resolve_table(name: str) -> str:
     raise HTTPException(status_code=404, detail=f"Tabla '{name}' no encontrada. Revisa /tables")
 
 # =========================
-# RAG con ranking optimizado
+# RAG enfocado a invitados
 # =========================
 def rank_preferred_tables() -> List[str]:
-    weights = {
-        "proveedores": 9, "categoriasproveedores": 8, "itinerarios": 8,
-        "presupuestos": 8, "productosproveedores": 7, "organizadoresbodas": 7,
-        "empresasorganizadores": 6, "tipoInvitado": 8, "mesasregalos": 6,
-        "estados": 5, "municipios": 5, "dieteticas": 6, "proveedoresdieteticas": 6,
-        "novios": 9, "invitados": 8, "mesasnovios": 7, "mensajeswa": 6,
-    }
-    scored = []
-    for canon in TABLES.keys():
-        base = canon.split(".")[-1].lower()
-        ntbl = re.sub(r"^tbl", "", base)
-        score = sum(v for k, v in weights.items() if k in ntbl)
-        scored.append((score, canon))
-    scored.sort(reverse=True)
-    return [c for _, c in scored]
+    return ["tblInvitados"] if "tblInvitados" in TABLES else []
 
 PREFERRED = rank_preferred_tables()
 
 def retrieve_context(question: str, max_items: int = 40) -> Dict[str, Any]:
     q_tokens = tokenize(question)
-    if not q_tokens:
-        ctx = {}
-        for t in PREFERRED[:8]:
-            rows = TABLES.get(t, [])
-            if rows:
-                ctx[t] = rows[:min(10, max_items)]
+    ctx: Dict[str, Any] = {}
+    rows = TABLES.get("tblInvitados", [])
+    if not rows:
         return ctx
-
+    if not q_tokens:
+        ctx["tblInvitados"] = rows[:min(len(rows), max_items)]
+        return ctx
     hits: List[Tuple[str, int]] = []
     for t in q_tokens:
         hits.extend(INVERTED.get(t, []))
     counts = Counter(hits)
-
-    by_table: Dict[str, List[int]] = defaultdict(list)
-    for (tname, idx), _ in counts.most_common():
-        by_table[tname].append(idx)
-
-    ctx: Dict[str, Any] = {}
-    max_per_table = max(3, max_items // 5)
-    for t in PREFERRED + list(by_table.keys()):
-        if t not in by_table or t in ctx:
-            continue
-        rows = TABLES.get(t, [])
-        if not rows:
-            continue
-        idxs = by_table[t][:max_per_table]
-        ctx[t] = [rows[i] for i in idxs if 0 <= i < len(rows)]
-
-    if not ctx:
-        for t in PREFERRED[:8]:
-            rows = TABLES.get(t, [])
-            if rows:
-                ctx[t] = rows[:min(10, max_items)]
+    idxs = [idx for (_, idx), _ in counts.most_common()]
+    if not idxs:
+        ctx["tblInvitados"] = rows[:min(len(rows), max_items)]
+        return ctx
+    ctx["tblInvitados"] = [rows[i] for i in idxs[:max_items] if 0 <= i < len(rows)]
     return ctx
 
 # =========================
-# Google NLP (REST con API key)
+# Google NLP opcional
 # =========================
 LANGUAGE_ENDPOINT = "https://language.googleapis.com/v2/documents:analyzeEntities"
 CLASSIFY_ENDPOINT = "https://language.googleapis.com/v2/documents:classifyText"
@@ -664,427 +327,485 @@ def gnlp_classify_text(text: str, language: str = "es") -> Dict[str, Any]:
     return r.json()
 
 # =========================
-# NLU: intents + follow-ups
+# NLU mejorado
 # =========================
 GREETING_WORDS = {"hola", "buenos dias", "buenas tardes", "buenas noches", "hey", "qué tal", "que tal"}
 WHO_ARE_YOU = {"quien eres", "quién eres", "como te llamas", "cómo te llamas"}
 HELP_WORDS = {"ayuda", "que puedes hacer", "qué puedes hacer", "ayudame", "ayúdame", "como funcionas", "cómo funcionas"}
 FOLLOW_MORE = {"mas", "más", "siguiente", "otra", "otro", "muestrame mas", "muéstrame más"}
-FOLLOW_PICK_REGEX = re.compile(r"\b(el|la)\s+(\d+)\b")
-FOLLOW_CONTACT = {"telefono", "teléfono", "correo", "email", "sitio", "web", "pagina", "página"}
 FOLLOW_DETAILS = {"detalles", "detalle", "por tipo", "por mesa"}
 
-CATEGORY_HINTS = {
-    "flor": "floristerías", "flores": "floristerías",
-    "foto": "fotógrafos", "fotógraf": "fotógrafos",
-    "banquete": "banquetes", "salon": "salones", "salón": "salones",
-    "pastel": "pastelerías", "pasteler": "pastelerías",
-    "bebida": "bebidas", "bebidas": "bebidas",
-    "vestido": "vestuario", "novia": "vestuario", "novio": "vestuario",
-    "invitacion": "invitaciones", "invitación": "invitaciones",
-    "mobiliario": "mobiliarios",
+FIELD_SYNONYMS = {
+    "telefono": ["tel", "teléfono", "telefono", "cel", "celular", "whatsapp", "whats"],
+    "correo": ["correo", "mail", "email", "e-mail"],
+    "mesa": ["(mesa de)", "(que mesa)", "(qué mesa)"],
+    "boletos": ["boletos", "pases", "tickets"],
+    "boletosConfirmados": ["boletos confirmados", "pases confirmados", "tickets confirmados"],
+    "apodo": ["apodo"],
+    "nombre": ["nombre"],
+    "qrEnviado": ["qr enviado", "qr enviados", "codigo enviado", "código enviado", "codigos enviados", "códigos enviados"],
+    "qrConfirmado": ["qr confirmado", "qr confirmados", "codigo confirmado", "código confirmado", "codigos confirmados", "códigos confirmados"],
+    "asistira": ["asistira", "asistirá", "asisten", "asistiran", "asistirán", "confirmado", "confirmados"],
 }
+
+# stopwords para limpiar target_text (más robustas para evitar caer en fact_query)
+STOPWORDS_FOR_TARGET = (
+    r"telefono|tel[eé]fono|cel|celular|whatsapp|correo|email|mail|"
+    r"mesa|boletos|boletos confirmados|"
+    r"qr|qr enviado|qr enviados|qr confirmado|qr confirmados|"
+    r"confirmad(?:o|a|os|as)|enviad(?:o|a|os|as)|asistir(?:a|á|an|án)?|asisten|asistencia|"
+    r"de|del|de la|de los|de las|para|por|con|"
+    r"busca|dame|muestra|quiero|quien es|quién es|quienes|quiénes|"
+    r"datos|info|informaci[oó]n|ficha|contacto"
+)
+
+def _has_mesa_filter(t: str) -> bool:
+    return bool(re.search(r"(?:^| )(?:invitados\s+)?(?:de\s+(?:la\s+)?)?mesa\s*#?\s*\d+\b", t)) or ("sin mesa" in t)
+
+def _has_mesas_grouping(t: str) -> bool:
+    return ("mesas" in t) or ("por mesa" in t)
+
+def _has_confirmados(t: str) -> bool:
+    return bool(re.search(r"\bconfirmad[oa]s?\b|\basistir(?:a|á|an|án)\b|\basiste[nrs]?\b", t))
+
+def _has_qr_enviado(t: str) -> bool:
+    return ("qr" in t and "enviad" in t)
+
+def _has_qr_confirmado(t: str) -> bool:
+    return ("qr" in t and "confirmad" in t)
+
+def _meaningful_tokens(s: str) -> List[str]:
+    toks = [w for w in tokenize(s) if len(w) >= 3 and w not in CONNECTORS]
+    return toks
+
+def _match_field(text: str) -> Optional[str]:
+    t = normalize(text)
+    # 'mesa' como campo solo si viene en frases de persona ("mesa de", "qué mesa")
+    if re.search(r"\b(que|qué)\s+mesa\b|\bmesa\s+de\b", t):
+        return "mesa"
+    # otros campos
+    for field, words in FIELD_SYNONYMS.items():
+        if field == "mesa":
+            continue
+        for w in words:
+            if w in t:
+                return field
+    return None
+
+def _extract_person_query(text: str) -> Tuple[Optional[int], str]:
+    t = normalize(text)
+    m = re.search(r"\b(?:id|#)\s*(\d+)\b", t)
+    if m:
+        try:
+            return int(m.group(1)), ""
+        except Exception:
+            pass
+    q = re.sub(rf"\b({STOPWORDS_FOR_TARGET})\b", "", t)
+    q = re.sub(r"[^\w@._+-]+", " ", q).strip()
+    return None, q
+
+def _looks_like_person_query(text: str) -> bool:
+    tid, q = _extract_person_query(text)
+    return bool(tid or EMAIL_RE.search(q) or len(_meaningful_tokens(q)) > 0)
 
 def detect_intent_and_slots(text: str) -> Dict[str, Any]:
     t = normalize(text)
-    intents = []
-    slots = {"date": None, "entidades": [], "categorias": []}
+    slots = {"date": parse_date(t), "entidades": [], "categorias": [], "field": None, "target_id": None, "target_text": ""}
 
-    # Extract date if present
-    date = parse_date(t)
-    if date:
-        slots["date"] = date
-
-    # Saludos / Identidad / Ayuda
     if any(w in t for w in GREETING_WORDS):
         return {"intent": "greeting", "slots": slots}
     if any(w in t for w in WHO_ARE_YOU):
         return {"intent": "who_are_you", "slots": slots}
     if any(w in t for w in HELP_WORDS):
         return {"intent": "help", "slots": slots}
-
-    # Follow-ups
     if any(w in t for w in FOLLOW_MORE):
         return {"intent": "follow_more", "slots": slots}
-    m = FOLLOW_PICK_REGEX.search(t)
-    if m:
-        try:
-            idx = int(m.group(2))
-            return {"intent": "follow_pick", "slots": {"index": idx, **slots}}
-        except:
-            pass
-    if any(w in t for w in FOLLOW_CONTACT):
-        return {"intent": "follow_contact", "slots": slots}
     if any(w in t for w in FOLLOW_DETAILS):
         return {"intent": "detalles_invitados", "slots": slots}
 
-    # Wedding-specific intents
-    if any(k in t for k in ["proveedor", "proveedores", "floristerías", "fotógrafos", "banquetes", "salones", "pastelerías", "bebidas", "vestuario", "invitaciones", "mobiliarios"]):
-        intents.append("buscar_proveedores")
-    if any(k in t for k in ["itinerario", "cronograma", "timeline", "hora", "actividad", "actividades", "ceremonia", "recepción", "fiesta"]):
-        intents.append("itinerario")
-    if any(k in t for k in ["presupuesto", "costo", "gastar", "pagar", "precio", "cuanto cuesta"]):
-        intents.append("presupuesto")
-    if any(k in t for k in ["invitado", "invitados", "lista de invitados", "tipo invitado"]):
-        intents.append("invitados")
-    if any(k in t for k in ["ubicacion", "ubicación", "donde", "dónde", "direccion", "dirección", "lugar", "venue", "misa", "recepcion", "fiesta"]):
-        intents.append("ubicacion_evento")
+    # Filtros claros antes de fact_query
+    if _has_mesa_filter(t) or _has_mesas_grouping(t):
+        return {"intent": "invitados", "slots": slots}
 
-    # Handle multi-intent or default to general
-    intent = intents[0] if intents else "general"
-    if len(intents) > 1:
-        intent = "multi_intent"
+    # Listados genéricos: confirmados / QR / boletos confirmados (sin persona) -> invitados
+    if (_has_confirmados(t) or _has_qr_enviado(t) or _has_qr_confirmado(t) or re.search(r"boletos\s+confirmad", t)):
+        if not _looks_like_person_query(t):
+            return {"intent": "invitados", "slots": slots}
+
+    # "ficha de {persona}"
+    if re.search(r"\bficha\s+de\b", t) or t.startswith("ficha "):
+        tid, q = _extract_person_query(t)
+        slots["target_id"], slots["target_text"] = tid, q
+        return {"intent": "detail_guest", "slots": slots}
+
+    # Conteo específico "¿cuántos boletos faltan?"
+    if "bolet" in t and ("faltan" in t or "restan" in t):
+        return {"intent": "count_boletos_faltan", "slots": slots}
+
+    # Conteos rápidos genéricos
+    if re.search(r"\bcu[aá]nt[oa]s?\b|\btotal\b", t):
+        return {"intent": "count_query", "slots": slots}
+
+    # Quién es X
+    if "quien es" in t or "quién es" in t:
+        tid, q = _extract_person_query(t)
+        slots["target_id"], slots["target_text"] = tid, q
+        return {"intent": "detail_guest", "slots": slots}
+
+    # Campo de persona (tel/correo/mesa/boletos/qr) solo si parece consulta de persona
+    fld = _match_field(t)
+    if fld is not None and _looks_like_person_query(t):
+        tid, q = _extract_person_query(t)
+        slots["field"] = fld
+        slots["target_id"], slots["target_text"] = tid, q
+        return {"intent": "fact_query", "slots": slots}
+
+    # Palabras clave de invitados/invitación
+    if any(k in t for k in [
+        "invitado", "invitados", "lista de invitados", "lista", "buscar", "busca",
+        "mesa", "mesas", "sin mesa",
+        "confirmado", "confirmados", "asistira", "asistirá", "asisten", "asistiran", "asistirán",
+        "qr", "qr enviado", "qr confirmados", "boletos", "boletos confirmados",
+        "correo", "email", "tel", "telefono", "teléfono", "gmail.com", "solo misa"
+    ]):
+        return {"intent": "invitados", "slots": slots}
 
     ents = gnlp_analyze_entities(text).get("entities", [])
     cats = gnlp_classify_text(text).get("categories", [])
     slots["entidades"] = ents
     slots["categorias"] = cats
-    slots["intents"] = intents
-    return {"intent": intent, "slots": slots}
+    return {"intent": "invitados", "slots": slots}
 
 # =========================
-# Helpers de negocio
+# Helpers invitados
 # =========================
-def find_table(name_like: str) -> Optional[str]:
-    name_like = normalize(name_like)
-    for k in TABLES.keys():
-        base = normalize(k.split(".")[-1])
-        if name_like in base or fuzz.ratio(name_like, base) > 80:
-            return k
-    return None
+def _nombre_completo(g: Dict[str, Any]) -> str:
+    return " ".join(
+        [str(g.get("nombre") or "").strip(),
+         str(g.get("aPaterno") or "").strip(),
+         str(g.get("aMaterno") or "").strip()]
+    ).strip() or "(sin nombre)"
 
-def map_category_name_to_id(q: str) -> Optional[int]:
-    tcat = find_table("categoriasproveedores")
-    if not tcat:
-        return None
-    qn = normalize(q)
-    for hint, stem in CATEGORY_HINTS.items():
-        if hint in qn:
-            for c in TABLES[tcat]:
-                if stem in normalize(c.get("nombreCategoria")):
-                    return c.get("idCategoriaProveedor")
-    best = None
-    best_score = 0
-    for c in TABLES[tcat]:
-        name = normalize(c.get("nombreCategoria"))
-        if not name:
-            continue
-        score = max(fuzz.ratio(qn, name), fuzz.partial_ratio(qn, name))
-        if score > best_score and score > 70:
-            best = c.get("idCategoriaProveedor")
-            best_score = score
-    return best
+def _agg_boletos(rows: List[Dict[str, Any]]) -> Tuple[int, int]:
+    total = sum(_int(g.get("boletos")) for g in rows)
+    confirm = sum(_int(g.get("boletosConfirmados")) for g in rows)
+    return total, confirm
 
-def pick_state_municipio_from_text(q: str) -> Tuple[Optional[int], Optional[int]]:
-    id_estado = id_muni = None
-    t_est = find_table("estados")
-    if t_est:
-        for e in TABLES[t_est]:
-            n = normalize(e.get("nombreEstado"))
-            if n and (n in normalize(q) or fuzz.ratio(n, normalize(q)) > 80):
-                id_estado = e.get("idEstado")
-                break
-    t_mun = find_table("municipios")
-    if t_mun:
-        for m in TABLES[t_mun]:
-            n = normalize(m.get("nombreMunicipio"))
-            if n and (n in normalize(q) or fuzz.ratio(n, normalize(q)) > 80):
-                id_muni = m.get("idMunicipio")
-                if not id_estado:
-                    id_estado = m.get("idEstado")
-                break
-    return id_estado, id_muni
+def _mesas_breakdown(rows: List[Dict[str, Any]]) -> Dict[int, int]:
+    mesas: Dict[int, int] = defaultdict(int)
+    for g in rows:
+        mesas[_int(g.get("mesa"))] += 1
+    return dict(sorted(mesas.items(), key=lambda x: x[0]))
 
-def filter_proveedores(q: str) -> List[Dict[str, Any]]:
-    tprov = find_table("proveedores")
-    if not tprov:
+def _suggest_next() -> str:
+    return (
+        "\n\n¿Seguimos? Puedes decirme por ejemplo:\n"
+        "• “invitados de la mesa 12” · “sin mesa”\n"
+        "• “teléfono de Carmen Chávez” · “correo de Farah”\n"
+        "• “¿cuántos confirmados?” · “QR confirmados”\n"
+        "• “busca a Enrique 333” o “gmail.com”"
+    )
+
+def _guest_tokens_match(g: Dict[str, Any], tokens: List[str]) -> bool:
+    if not tokens:
+        return False
+    name = normalize(_nombre_completo(g))
+    mail = normalize(g.get("correo") or "")
+    phone_digits = "".join(DIGITS_RE.findall(g.get("telefono") or ""))
+    for tok in tokens:
+        if tok not in name and tok not in mail and tok not in phone_digits:
+            return False
+    return True
+
+def _find_guest_by_id_or_text(rows: List[Dict[str, Any]], target_id: Optional[int], target_text: str) -> List[Dict[str, Any]]:
+    if target_id is not None:
+        return [g for g in rows if _int(g.get("idInvitado")) == target_id]
+    t = normalize(target_text)
+    if not t:
         return []
-    toks = set(tokenize(q))
-    cat_id = map_category_name_to_id(q)
-    id_estado, id_muni = pick_state_municipio_from_text(q)
-
-    scored: List[Tuple[int, Dict[str, Any]]] = []
-    for row in TABLES[tprov]:
-        if cat_id and row.get("idCategoriaProveedor") != cat_id:
-            continue
-        if id_estado and row.get("idEstado") != id_estado:
-            continue
-        if id_muni and row.get("idMunicipio") != id_muni:
-            continue
-
-        score = 0
-        for field in ("nomNegocio", "direccion", "pais", "sitioWeb", "email", "descripcion"):
-            v = (row.get(field) or "")
-            field_toks = set(tokenize(v))
-            score += len(field_toks.intersection(toks))
-            if field == "nomNegocio" and v:
-                score += fuzz.partial_ratio(q, normalize(v)) // 20
-        if any(k in normalize(q) for k in ["telefono", "teléfono"]):
-            if row.get("tel"):
-                score += 2
-        if any(k in normalize(q) for k in ["precio", "costo"]):
-            if row.get("precioInicial") is not None:
-                score += 2
-        scored.append((score, row))
-
-    scored.sort(reverse=True, key=lambda x: x[0])
-    return [r for _, r in scored[:10] if _ > 0]
-
-def filter_itinerario(date: Optional[datetime]) -> List[Dict[str, Any]]:
-    tit = find_table("itinerarios")
-    if not tit or not TABLES[tit]:
-        return []
-    items = TABLES[tit]
-    if date:
-        filtered = []
-        for item in items:
-            start_date = item.get("horaInicio")
-            if start_date:
-                try:
-                    item_date = datetime.strptime(start_date.split(" ")[0], "%Y-%m-%d")
-                    if item_date.date() == date.date():
-                        filtered.append(item)
-                except ValueError:
-                    continue
-        return sorted(filtered, key=lambda x: x.get("horaInicio") or "")[:6]
-    return sorted(items, key=lambda x: x.get("horaInicio") or "")[:6]
+    tokens = _meaningful_tokens(t)
+    # Primero: exigir que todos los tokens aparezcan
+    strong = [g for g in rows if _guest_tokens_match(g, tokens)] if tokens else []
+    if strong:
+        strong.sort(key=lambda g: fuzz.token_set_ratio(t, normalize(_nombre_completo(g))), reverse=True)
+        return strong
+    # fallback: fuzzy general
+    def score(g):
+        s = 0
+        s = max(s, fuzz.token_set_ratio(t, normalize(_nombre_completo(g))))
+        s = max(s, fuzz.partial_ratio(t, normalize(g.get("correo") or "")))
+        s = max(s, fuzz.partial_ratio(t, normalize(g.get("telefono") or "")))
+        return s
+    cand = [g for g in rows if score(g) >= 70]
+    cand.sort(key=lambda g: score(g), reverse=True)
+    return cand
 
 # =========================
-# Composición de respuesta
+# Respuestas
 # =========================
 def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[str, Any]) -> str:
-    last = session.get("last", {})
-    slots = session.get("last_slots", {})
-    date = slots.get("date") or parse_date(text)
-
     if intent == "greeting":
-        return "¡Hola! Soy BodaBot, tu asistente para planear tu boda perfecta. Puedo ayudarte con proveedores, itinerario, invitados, presupuestos o ubicaciones. ¿Qué necesitas hoy?"
+        return "¡Hola! Soy BodaBot 💍. Te ayudo con tus invitados: lista, confirmados, mesas, QR, boletos… y búsquedas por nombre/correo/teléfono." + _suggest_next()
     if intent == "who_are_you":
-        return "Soy BodaBot, tu ayudante para bodas. Busco proveedores, organizo itinerarios, gestiono listas de invitados y resumo presupuestos usando tu data.json. ¡Dime cómo te ayudo!"
+        return "Soy BodaBot, tu asistente para la boda. Trabajo con **tblInvitados**: listar, buscar, contar y darte detalles con un tono humano 😉."
     if intent == "help":
-        return "Puedo ayudarte a:\n1. Encontrar proveedores (ej. 'floristería en Guerrero')\n2. Crear itinerarios (ej. 'cronograma del 15 de noviembre')\n3. Gestionar invitados (ej. 'lista de invitados por tipo')\n4. Revisar presupuestos (ej. 'costo total de la boda')\n5. Buscar ubicaciones (ej. 'lugar de la recepción')\n¿Qué quieres explorar?"
+        return ("Puedo ayudarte con invitados:\n"
+                "• Lista general: “lista de invitados”\n"
+                "• Confirmaciones: “quiénes asistirán”, “confirmados”\n"
+                "• Boletos: “boletos”, “boletos confirmados”\n"
+                "• Mesas: “invitados de la mesa 5”, “sin mesa”, “mesas (por mesa)”\n"
+                "• QR: “qr enviados”, “qr confirmados”\n"
+                "• Búsqueda: “ficha de Farah”, “correo gmail”, “tel 333”" + _suggest_next())
 
+    rows = TABLES.get("tblInvitados", [])
+    if not rows:
+        return "No hay datos en **tblInvitados**. Asegúrate de que `data.json` incluya esa tabla o un array de invitados."
+
+    t = normalize(text)
+
+    # Paginación
     if intent == "follow_more":
-        if last.get("type") == "proveedores" and last.get("candidates"):
+        last = session.get("last", {})
+        if last.get("type") == "invitados" and last.get("candidates"):
             shown = last.get("shown", 0)
-            step = 4
+            step = 10
             nxt = last["candidates"][shown:shown+step]
             if not nxt:
-                return "No hay más proveedores. ¿Quieres filtrar por otra categoría o ubicación?"
+                return "No hay más resultados."
             session["last"]["shown"] = shown + len(nxt)
             session["last"]["display"] = nxt
-            return render_proveedores(nxt, prefix="Más proveedores para tu boda:\n")
-        if last.get("type") == "invitados":
-            return "No hay más detalles de invitados. ¿Quieres ver por mesa o tipo específico?"
-        return "¿De qué quieres ver más: proveedores, itinerario, invitados, presupuesto?"
+            return render_invitados_list(nxt, prefix="Más invitados:\n")
+        return "No hay una lista previa para continuar."
 
-    if intent == "follow_pick":
-        if last.get("type") == "proveedores" and last.get("display"):
-            m = re.search(r"\b(el|la)\s+(\d+)\b", normalize(text))
-            if m:
-                idx = int(m.group(2))
-                disp = last["display"]
-                if 1 <= idx <= len(disp):
-                    item = disp[idx-1]
-                    return render_proveedor_detalle(item)
-            return "No reconocí el número. Usa por ejemplo: 'el 2' para detalles."
-        return "¿De qué lista quieres elegir un número?"
+    # Detalle: “quién es …” o “ficha de …”
+    if intent == "detail_guest":
+        from_slots = session.get("last_slots") or {}
+        target_id = from_slots.get("target_id")
+        target_text = from_slots.get("target_text", "")
+        if not target_id and not target_text:
+            tid2, q2 = _extract_person_query(t)
+            target_id, target_text = tid2, q2
+        cand = _find_guest_by_id_or_text(rows, target_id, target_text)
+        if not cand:
+            return "No encontré a esa persona. ¿Me das nombre, correo, teléfono o el ID? 😊"
+        if len(cand) > 1:
+            top = cand[:5]
+            return render_invitados_list(top, prefix="Encontré varios, ¿cuál de estos es?\n")
+        g = cand[0]
+        return render_guest_card(g)
 
-    if intent == "follow_contact":
-        if last.get("type") == "proveedores" and last.get("display"):
-            lines = []
-            for i, it in enumerate(last["display"], start=1):
-                tel = it.get("tel") or "No disponible"
-                mail = it.get("email") or "No disponible"
-                web = it.get("sitioWeb") or "No disponible"
-                lines.append(f"{i}. {it.get('nomNegocio') or '(sin nombre)'} · Tel: {tel} · Email: {mail} · Web: {web}")
-            return "Contactos de los últimos proveedores:\n" + "\n".join(lines)
-        return "Primero busca proveedores con algo como 'floristería en Chilapa' y luego te doy los contactos."
+    # Campo de persona: teléfono/correo/mesa/boletos/qr…
+    if intent == "fact_query":
+        field = session.get("last_slots", {}).get("field")
+        target_id = session.get("last_slots", {}).get("target_id")
+        target_text = session.get("last_slots", {}).get("target_text", "")
+        if not field:
+            field = _match_field(t)
+        if not (target_id or target_text):
+            tid2, q2 = _extract_person_query(t)
+            target_id, target_text = tid2, q2
 
-    if intent == "detalles_invitados":
-        tinv = find_table("invitados")
-        ttype = find_table("tipoInvitado")
-        if tinv and ttype and TABLES[tinv] and TABLES[ttype]:
-            type_map = {t.get("idTipoInvitado"): t.get("tipoInvitado") for t in TABLES[ttype] if t.get("tipoInvitado")}
-            guests_by_type = defaultdict(list)
-            for guest in TABLES[tinv]:
-                type_id = guest.get("idTipoInvitado")
-                if type_id in type_map:
-                    name = f"{guest.get('nombre', '')} {guest.get('aPaterno', '')} {guest.get('aMaterno', '')}".strip()
-                    guests_by_type[type_map[type_id]].append(name or "(sin nombre)")
-            
-            lines = []
-            for type_name, guests in guests_by_type.items():
-                lines.append(f"- {type_name}: {len(guests)} invitado(s)")
-                for i, guest in enumerate(guests[:5], 1):  # Limit to 5 per type
-                    lines.append(f"  {i}. {guest}")
-                if len(guests) > 5:
-                    lines.append(f"  ...y {len(guests) - 5} más")
-            session["last"] = {"type": "invitados", "total": len(TABLES[tinv])}
-            return f"Detalles de invitados por tipo:\n" + "\n".join(lines) + "\n\n¿Quieres ver por mesa o más detalles?"
-        return "No hay datos de invitados. ¿Subimos una lista?"
+        cand = _find_guest_by_id_or_text(rows, target_id, target_text)
+        if not cand:
+            return "No pude ubicar a esa persona. ¿Me repites nombre, correo o ID? 🙏"
+        if len(cand) > 1:
+            sample = render_invitados_list(cand[:5], prefix="Encontré varios, ¿cuál de estos es?\n")
+            return sample
 
-    if intent == "buscar_proveedores":
-        provs = filter_proveedores(text)
-        if not provs:
-            return "No encontré proveedores con ese criterio. Prueba con 'fotógrafos en Chilapa' o 'bebidas para boda'."
-        session["last"] = {
-            "type": "proveedores",
-            "candidates": provs,
-            "shown": len(provs[:4]),
-            "display": provs[:4]
+        g = cand[0]
+        nombre = _nombre_completo(g)
+        if field == "telefono":
+            return f"📞 Teléfono de {nombre}: { _format_phone(g.get('telefono') or '—') }"
+        if field == "correo":
+            return f"📧 Correo de {nombre}: { g.get('correo') or '—' }"
+        if field == "mesa":
+            mesa = _int(g.get("mesa"))
+            mesa_txt = mesa if mesa > 0 else "—"
+            return f"🍽️ Mesa de {nombre}: {mesa_txt}"
+        if field == "boletos":
+            return f"🎟️ Boletos asignados a {nombre}: { _int(g.get('boletos')) }"
+        if field == "boletosConfirmados":
+            return f"✅ Boletos confirmados de {nombre}: { _int(g.get('boletosConfirmados')) }"
+        if field == "qrEnviado":
+            val = "sí" if _bit(g.get("qrEnviado")) == 1 else "no"
+            return f"✉️ ¿QR enviado para {nombre}?: {val}"
+        if field == "qrConfirmado":
+            val = "sí" if _bit(g.get("qrConfirmado")) == 1 else "no"
+            return f"✔️ ¿QR confirmado para {nombre}?: {val}"
+        if field == "apodo":
+            return f"🧾 Apodo de {nombre}: { g.get('apodo') or '—' }"
+        if field == "nombre":
+            return f"👤 Nombre completo: { nombre }"
+        return "Puedo darte: teléfono, correo, mesa, boletos, boletos confirmados, QR enviado/confirmado, apodo o nombre." + _suggest_next()
+
+    # Conteo general
+    if intent == "count_query":
+        total_boletos, total_boletos_conf = _agg_boletos(rows)
+        counts = {
+            "total": len(rows),
+            "asistira": sum(1 for g in rows if _bit(g.get("asistira")) == 1),
+            "no_confirmados": sum(1 for g in rows if _bit(g.get("asistira")) == 0),
+            "sin_mesa": sum(1 for g in rows if _int(g.get("mesa")) == 0),
+            "qr_enviado": sum(1 for g in rows if _bit(g.get("qrEnviado")) == 1),
+            "qr_confirmado": sum(1 for g in rows if _bit(g.get("qrConfirmado")) == 1),
+            "boletos": total_boletos,
+            "boletos_confirmados": total_boletos_conf,
         }
-        return render_proveedores(provs[:4])
+        return (f"Resumen rápido:\n"
+                f"• Invitados: {counts['total']}\n"
+                f"• Confirmados (asistirá): {counts['asistira']}\n"
+                f"• Sin confirmar: {counts['no_confirmados']}\n"
+                f"• Sin mesa: {counts['sin_mesa']}\n"
+                f"• QR enviados: {counts['qr_enviado']} · QR confirmados: {counts['qr_confirmado']}\n"
+                f"• Boletos: {counts['boletos']} / Confirmados: {counts['boletos_confirmados']}"
+                + _suggest_next())
 
-    if intent == "itinerario":
-        items = filter_itinerario(date)
-        if items:
-            session["last"] = {"type": "itinerario", "items": items}
-            lines = []
-            for i, it in enumerate(items, 1):
-                time = it.get("horaInicio") or "N/D"
-                if isinstance(time, str) and time.startswith("202"):
-                    time = time.split(" ")[0]
-                lines.append(f"{i}. {it.get('actividad')} ({time}, Resp: {it.get('responsables') or 'N/D'})")
-            return f"Itinerario de la boda ({date.strftime('%d/%m/%Y') if date else 'muestra'}):\n" + "\n".join(lines) + "\n\n¿Ajustamos horarios o añadimos actividades?"
-        return f"No hay itinerario para {date.strftime('%d/%m/%Y') if date else 'esa fecha'}. ¿Creamos uno con la ceremonia y recepción?"
+    # Conteo específico
+    if intent == "count_boletos_faltan":
+        total_boletos, total_boletos_conf = _agg_boletos(rows)
+        faltan = max(0, total_boletos - total_boletos_conf)
+        return f"🎟️ Faltan **{faltan}** boletos por confirmar (Totales: {total_boletos} · Confirmados: {total_boletos_conf})."
 
-    if intent == "presupuesto":
-        tpre = find_table("presupuestos")
-        if tpre and TABLES[tpre]:
-            tot = 0.0
-            by_cat = defaultdict(float)
-            tcat = find_table("categoriasproveedores")
-            cat_map = {c["idCategoriaProveedor"]: c["nombreCategoria"] for c in TABLES.get(tcat, [])}
-            for p in TABLES[tpre]:
-                costo = float(p.get("costo") or 0.0)
-                if date:
-                    try:
-                        pago_date = datetime.strptime(p.get("fechaPago", "").split(" ")[0], "%Y-%m-%d")
-                        if pago_date.date() != date.date():
-                            continue
-                    except ValueError:
-                        continue
-                tot += costo
-                cat_id = p.get("idServicioCategoProv")
-                cat = cat_map.get(cat_id, "Otros")
-                by_cat[cat] += costo
-            session["last"] = {"type": "presupuesto", "items": TABLES[tpre][:8]}
-            lines = [f"- {cat}: ${amt:,.2f} MXN" for cat, amt in by_cat.items()]
-            return f"Presupuesto de la boda{f' ({date.strftime('%d/%m/%Y')})' if date else ''}:\n" + "\n".join(lines) + f"\n\nTotal: ${tot:,.2f} MXN\n¿Filtramos por categoría o fecha?"
-        return "No hay datos de presupuesto. ¿Cuál es tu presupuesto objetivo?"
+    # Vista / filtros (incluye combinados)
+    if intent in ("detalles_invitados", "invitados"):
+        filtered = rows
 
-    if intent == "invitados":
-        tinv = find_table("tipoInvitado")
-        if tinv and TABLES[tinv]:
-            total = len(TABLES[tinv])
-            by_type = Counter(t.get("tipoInvitado") for t in TABLES[tinv] if t.get("tipoInvitado"))
-            session["last"] = {"type": "invitados", "total": total}
-            lines = [f"- {typ}: {cnt} invitado(s)" for typ, cnt in by_type.most_common(5)]
-            return f"Total: {total} invitados\n" + "\n".join(lines) + "\n\n¿Quieres detalles por tipo o mesa?"
-        return "No hay datos de invitados. ¿Subimos una lista?"
+        # Mesa específica (acepta “mesa 12”, “de mesa 12”, “de la mesa 12”)
+        m = re.search(r"(?:de\s+(?:la\s+)?)?mesa\s*#?\s*(\d+)", t)
+        mesa_val = int(m.group(1)) if m else None
+        if mesa_val is not None:
+            filtered = [g for g in filtered if _int(g.get("mesa")) == mesa_val]
 
-    if intent == "ubicacion_evento":
-        tnov = find_table("novios")
-        parts = []
-        if tnov and TABLES[tnov]:
-            n = TABLES[tnov][0]
-            if n.get("misaLugar"):
-                parts.append(f"Ceremonia: {n.get('misaLugar')} ({n.get('misaFecha')})")
-            if n.get("recepcionLugar"):
-                parts.append(f"Recepción: {n.get('recepcionLugar')} ({n.get('recepcionFecha')})")
-            if n.get("fiestaLugar"):
-                parts.append(f"Fiesta: {n.get('fiestaLugar')} ({n.get('fiestaFecha')})")
-        if parts:
-            session["last"] = {"type": "ubicacion", "parts": parts}
-            return "Ubicación del evento:\n" + "\n".join(parts) + "\n¿Necesitas un mapa o direcciones?"
-        return "No hay datos de ubicación. ¿Me das el lugar de la ceremonia, recepción o fiesta?"
+        # Sin mesa
+        if "sin mesa" in t:
+            filtered = [g for g in filtered if _int(g.get("mesa")) == 0]
 
-    if intent == "multi_intent":
-        responses = []
-        for sub_intent in slots.get("intents", []):
-            if sub_intent == "itinerario":
-                items = filter_itinerario(date)
-                if items:
-                    lines = []
-                    for i, it in enumerate(items, 1):
-                        time = it.get("horaInicio") or "N/D"
-                        if isinstance(time, str) and time.startswith("202"):
-                            time = time.split(" ")[0]
-                        lines.append(f"{i}. {it.get('actividad')} ({time}, Resp: {it.get('responsables') or 'N/D'})")
-                    responses.append(f"Itinerario ({date.strftime('%d/%m/%Y') if date else 'muestra'}):\n" + "\n".join(lines))
-                else:
-                    responses.append(f"No hay itinerario para {date.strftime('%d/%m/%Y') if date else 'esa fecha'}.")
-            elif sub_intent == "presupuesto":
-                tpre = find_table("presupuestos")
-                if tpre and TABLES[tpre]:
-                    tot = 0.0
-                    by_cat = defaultdict(float)
-                    tcat = find_table("categoriasproveedores")
-                    cat_map = {c["idCategoriaProveedor"]: c["nombreCategoria"] for c in TABLES.get(tcat, [])}
-                    for p in TABLES[tpre]:
-                        costo = float(p.get("costo") or 0.0)
-                        if date:
-                            try:
-                                pago_date = datetime.strptime(p.get("fechaPago", "").split(" ")[0], "%Y-%m-%d")
-                                if pago_date.date() != date.date():
-                                    continue
-                            except ValueError:
-                                continue
-                        tot += costo
-                        cat_id = p.get("idServicioCategoProv")
-                        cat = cat_map.get(cat_id, "Otros")
-                        by_cat[cat] += costo
-                    lines = [f"- {cat}: ${amt:,.2f} MXN" for cat, amt in by_cat.items()]
-                    responses.append(f"Presupuesto{f' ({date.strftime('%d/%m/%Y')})' if date else ''}:\n" + "\n".join(lines) + f"\nTotal: ${tot:,.2f} MXN")
-                else:
-                    responses.append("No hay datos de presupuesto.")
-        session["last"] = {"type": "multi_intent", "intents": slots.get("intents", [])}
-        session["last_slots"] = slots
-        return "\n\n".join(responses) + "\n\n¿Quieres más detalles sobre alguno?"
+        # Confirmados (asistirá)
+        if _has_confirmados(t):
+            filtered = [g for g in filtered if _bit(g.get("asistira")) == 1]
 
-    session["last_slots"] = slots
-    snippet = []
-    for t, rows in list(ctx.items())[:3]:
-        snippet.append(f"- {t}: {len(rows)} registros")
-    s = "\n".join(snippet) if snippet else "(sin datos relevantes)"
-    return f"¡Hola! BodaBot está listo para ayudarte con tu boda.\nPrueba con: 'floristerías en Guerrero', 'itinerario del 15 de noviembre', 'presupuesto de bebidas'.\n\nContexto disponible:\n{s}"
+        # Solo misa
+        if re.search(r"\bsolo\s+misa\b", t):
+            filtered = [g for g in filtered if _bit(g.get("soloMisa")) == 1]
 
-def render_proveedores(items: List[Dict[str, Any]], prefix: str = "Proveedores para tu boda:\n") -> str:
-    tcat = find_table("categoriasproveedores")
-    cat_by_id = {c.get("idCategoriaProveedor"): c.get("nombreCategoria") for c in TABLES.get(tcat, [])}
-    lines = []
-    for i, it in enumerate(items, start=1):
-        cat = cat_by_id.get(it.get("idCategoriaProveedor"), "N/D")
-        precio = f" · Precio inicial: ${it.get('precioInicial'):,.2f} MXN" if it.get("precioInicial") is not None else ""
-        lines.append(
-            f"{i}. {it.get('nomNegocio') or '(sin nombre)'}"
-            f"{' · ' + cat if cat else ''}"
-            f"{' · Tel: ' + it['tel'] if it.get('tel') else ''}"
-            f"{' · Email: ' + it['email'] if it.get('email') else ''}"
-            f"{precio}"
+        # QR
+        if _has_qr_enviado(t):
+            filtered = [g for g in filtered if _bit(g.get("qrEnviado")) == 1]
+        if _has_qr_confirmado(t):
+            filtered = [g for g in filtered if _bit(g.get("qrConfirmado")) == 1]
+
+        # Boletos confirmados (lista de quienes tienen > 0 confirmados)
+        if re.search(r"\bboletos\s+confirmad", t):
+            filtered = [g for g in filtered if _int(g.get("boletosConfirmados")) > 0]
+
+        # Prefijo de teléfono
+        m_tel = re.search(r"\b(?:tel(?:efono)?|cel|celular|whats(?:app)?)\s*([0-9]{2,})", t)
+        if m_tel:
+            phone_prefix = m_tel.group(1)
+            def phone_has_prefix(g):
+                digits = "".join(DIGITS_RE.findall(g.get("telefono") or ""))
+                return phone_prefix in digits
+            filtered = [g for g in filtered if phone_has_prefix(g)]
+
+        # Búsqueda libre por nombre/correo/teléfono
+        wants_boletos = "boletos" in t
+        name_like_raw = re.sub(
+            r"\b(invitados?|lista|buscar|busca|de|la|el|los|las|por|mesa|mesas|confirmad[oa]s?|asistir[aá](?:n)?|asisten|qr|boletos|sin mesa|email|correo|tel[eé]fono|tel|cel|celular|whats(?:app)?)\b",
+            "", t
         )
-    lines.append("\nDi 'el 2' para detalles, 'más' para más opciones, o 'teléfono' para contactos.")
+        name_like_raw = re.sub(r"[^\w@._+-]+", " ", name_like_raw).strip()
+        tokens = _meaningful_tokens(name_like_raw)
+        if (EMAIL_RE.search(name_like_raw) or len(tokens) > 0) and not m_tel:
+            def score(g):
+                s = 0
+                s = max(s, fuzz.token_set_ratio(name_like_raw, normalize(_nombre_completo(g))))
+                s = max(s, fuzz.partial_ratio(name_like_raw, normalize(g.get("correo") or "")))
+                s = max(s, fuzz.partial_ratio(name_like_raw, normalize(g.get("telefono") or "")))
+                return s
+            filtered = [g for g in filtered if score(g) >= 60]
+            filtered.sort(key=lambda g: fuzz.token_set_ratio(name_like_raw, normalize(_nombre_completo(g))), reverse=True)
+
+        # Resumen
+        total_boletos, total_boletos_conf = _agg_boletos(rows)
+        header = (f"Invitados (total: {len(rows)}) · "
+                  f"Asistirá: {sum(1 for g in rows if _bit(g.get('asistira')) == 1)} · "
+                  f"Solo misa: {sum(1 for g in rows if _bit(g.get('soloMisa')) == 1)} · "
+                  f"QR enviado: {sum(1 for g in rows if _bit(g.get('qrEnviado')) == 1)} · "
+                  f"QR confirmado: {sum(1 for g in rows if _bit(g.get('qrConfirmado')) == 1)} · "
+                  f"Boletos: {total_boletos} / Confirmados: {total_boletos_conf}")
+
+        extra = ""
+        if wants_boletos:
+            faltan = max(0, total_boletos - total_boletos_conf)
+            extra += f"\nBoletos: Totales={total_boletos} · Confirmados={total_boletos_conf} · Faltan={faltan}"
+
+        # Desglose por mesa
+        if _has_mesas_grouping(t):
+            mesas = _mesas_breakdown(filtered)
+            top = [f"Mesa {k or 0}: {v} invitado(s)" for k, v in list(mesas.items())[:50]]
+            extra += ("\n\nPor mesa:\n" + ("\n".join(top) if top else "—"))
+
+        page = filtered[:10]
+        session["last"] = {"type": "invitados", "candidates": filtered, "shown": len(page), "display": page}
+        if not filtered:
+            return header + extra + "\n\nNo encontré invitados con ese criterio." + _suggest_next()
+        return header + extra + "\n\n" + render_invitados_list(page)
+
+    ctx_preview = len(ctx.get("tblInvitados", []))
+    return (f"Listo para ayudarte con **tblInvitados** (contexto: {ctx_preview} registros).\n"
+            f"Ejemplos: “lista de invitados”, “confirmados”, “boletos”, “invitados de la mesa 4”, “sin mesa”, “qr confirmados”, “ficha de Farah”."
+            + _suggest_next())
+
+def render_guest_card(g: Dict[str, Any]) -> str:
+    nombre = _nombre_completo(g)
+    mesa = _int(g.get("mesa"))
+    mesa_txt = mesa if mesa > 0 else "—"
+    asistira = "✅" if _bit(g.get("asistira")) == 1 else "—"
+    solo_misa = "⛪" if _bit(g.get("soloMisa")) == 1 else "—"
+    qr = "✉" if _bit(g.get("qrEnviado")) == 1 else "—"
+    qr_ok = "✔" if _bit(g.get("qrConfirmado")) == 1 else "—"
+    correo = g.get("correo") or "—"
+    tel = _format_phone(g.get("telefono") or "")
+    return (f"👤 {nombre} (ID { _int(g.get('idInvitado')) })\n"
+            f"• Mesa: {mesa_txt}\n"
+            f"• Asistirá: {asistira} · Solo misa: {solo_misa}\n"
+            f"• QR: {qr}/{qr_ok}\n"
+            f"• 📧 {correo} · 📞 {tel}" + _suggest_next())
+
+def invitado_summary(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    total_boletos, total_boletos_conf = _agg_boletos(rows)
+    return {
+        "total": len(rows),
+        "asistira": sum(1 for g in rows if _bit(g.get("asistira")) == 1),
+        "solo_misa": sum(1 for g in rows if _bit(g.get("soloMisa")) == 1),
+        "qr_enviado": sum(1 for g in rows if _bit(g.get("qrEnviado")) == 1),
+        "qr_confirmado": sum(1 for g in rows if _bit(g.get("qrConfirmado")) == 1),
+        "boletos": total_boletos,
+        "boletos_confirmados": total_boletos_conf,
+    }
+
+def render_invitados_list(items: List[Dict[str, Any]], prefix: str = "Invitados:\n") -> str:
+    lines = []
+    for i, g in enumerate(items, start=1):
+        nombre = _nombre_completo(g)
+        mesa = _int(g.get("mesa"))
+        mesa_txt = mesa if mesa > 0 else "—"
+        correo = g.get("correo") or "—"
+        tel = _format_phone(g.get("telefono") or "")
+        asistira = "✅" if _bit(g.get("asistira")) == 1 else "—"
+        solo_misa = "⛪" if _bit(g.get("soloMisa")) == 1 else "—"
+        qr = "✉" if _bit(g.get("qrEnviado")) == 1 else "—"
+        qr_ok = "✔" if _bit(g.get("qrConfirmado")) == 1 else "—"
+        lines.append(
+            f"{i}. {nombre} (ID { _int(g.get('idInvitado')) }) · Mesa: {mesa_txt} · "
+            f"Asistirá: {asistira} · Solo misa: {solo_misa} · QR: {qr}/{qr_ok} · 📧 {correo} · 📞 {tel}"
+        )
+    if len(items) >= 10:
+        lines.append("\nDi “más” para ver más resultados.")
     return prefix + "\n".join(lines)
 
-def render_proveedor_detalle(it: Dict[str, Any]) -> str:
-    tcat = find_table("categoriasproveedores")
-    cat = next((c.get("nombreCategoria") for c in TABLES.get(tcat, []) if c.get("idCategoriaProveedor") == it.get("idCategoriaProveedor")), "N/D")
-    detalle = [
-        f"Nombre: {it.get('nomNegocio') or '(sin nombre)'}",
-        f"Categoría: {cat}",
-        f"Teléfono: {it.get('tel') or 'No disponible'}",
-        f"Email: {it.get('email') or 'No disponible'}",
-        f"Web: {it.get('sitioWeb') or 'No disponible'}",
-        f"Dirección: {it.get('direccion') or 'No disponible'}",
-        f"País: {it.get('pais') or 'No disponible'}",
-        f"Precio inicial: ${it.get('precioInicial'):,.2f} MXN" if it.get("precioInicial") is not None else "Precio inicial: No disponible",
-        "¿Quieres que agende un contacto o busque alternativas?"
-    ]
-    return "\n".join(detalle)
-
 # =========================
-# STT/TTS helpers
+# STT/TTS
 # =========================
 def speech_client() -> speech.SpeechClient:
     return speech.SpeechClient()
@@ -1164,6 +885,7 @@ class AskRequest(BaseModel):
     question: str
     max_ctx_items: Optional[int] = 40
     session_id: Optional[str] = None
+    temperature: Optional[float] = 0.0  # compatible con el front
 
 class AskResponse(BaseModel):
     model: str
@@ -1179,10 +901,11 @@ class AskResponse(BaseModel):
 @app.get("/")
 def root():
     return {
-        "name": "BodaBot API",
-        "version": "3.4-wedding-enhanced",
+        "name": "BodaBot API (Invitados & Anfitrión)",
+        "version": "4.5-invitados-anfitrion",
         "endpoints": [
-            "/health", "/tables", "/table/{name}", "/search",
+            "/health", "/schema", "/tables", "/table/{name}", "/search",
+            "/invitados/summary", "/invitados/find", "/invitados/{idInvitado}",
             "/ask", "/ask_audio", "/ask_audio_wav", "/refresh"
         ],
     }
@@ -1201,6 +924,10 @@ def health():
         "tts_voice": TTS_VOICE,
         "cors_origins": CORS_ORIGINS,
     }
+
+@app.get("/schema")
+def schema():
+    return {"schema": SCHEMA_DEF["tblInvitados"]}
 
 @app.post("/refresh")
 def refresh():
@@ -1249,6 +976,47 @@ def search(
                 break
     return {"query": q, "count": len(results), "results": results}
 
+@app.get("/invitados/summary")
+def invitados_summary():
+    rows = TABLES.get("tblInvitados", [])
+    return invitado_summary(rows)
+
+@app.get("/invitados/{idInvitado}")
+def invitados_get(idInvitado: int):
+    rows = TABLES.get("tblInvitados", [])
+    for g in rows:
+        if _int(g.get("idInvitado")) == idInvitado:
+            return g
+    raise HTTPException(status_code=404, detail="Invitado no encontrado")
+
+@app.get("/invitados/find")
+def invitados_find(
+    q: str = Query(..., min_length=1),
+    mesa: Optional[int] = Query(None),
+    confirmados: Optional[bool] = Query(None),
+    qr: Optional[str] = Query(None, description="enviado|confirmado"),
+    limit: int = Query(20, ge=1, le=200)
+):
+    rows = TABLES.get("tblInvitados", [])
+    t = normalize(q)
+    def score(g):
+        s = 0
+        s = max(s, fuzz.partial_ratio(t, normalize(_nombre_completo(g))))
+        s = max(s, fuzz.partial_ratio(t, normalize(g.get("correo") or "")))
+        s = max(s, fuzz.partial_ratio(t, normalize(g.get("telefono") or "")))
+        return s
+    filt = [g for g in rows if score(g) >= 60]
+    if mesa is not None:
+        filt = [g for g in filt if _int(g.get("mesa")) == mesa]
+    if confirmados is not None:
+        filt = [g for g in filt if _bit(g.get("asistira")) == (1 if confirmados else 0)]
+    if qr:
+        if qr == "enviado":
+            filt = [g for g in filt if _bit(g.get("qrEnviado")) == 1]
+        if qr == "confirmado":
+            filt = [g for g in filt if _bit(g.get("qrConfirmado")) == 1]
+    return {"count": len(filt[:limit]), "items": filt[:limit]}
+
 def _get_session(session_id: Optional[str], session_header: Optional[str]) -> Tuple[str, Dict[str, Any]]:
     sid = session_id or session_header or DEFAULT_SESSION
     return sid, SESSIONS[sid]
@@ -1257,10 +1025,10 @@ def _get_session(session_id: Optional[str], session_header: Optional[str]) -> Tu
 def ask(req: AskRequest, x_session_id: Optional[str] = Header(None)):
     sid, session = _get_session(req.session_id, x_session_id)
     nlu = detect_intent_and_slots(req.question)
+    session["last_slots"] = nlu.get("slots", {})
     ctx = retrieve_context(req.question, req.max_ctx_items or 40)
     answer = compose_answer(nlu["intent"], req.question, ctx, session)
     session["last_intent"] = nlu["intent"]
-    session["last_slots"] = nlu["slots"]
     return AskResponse(
         model="google-nlp",
         answer=answer,
@@ -1278,17 +1046,17 @@ async def ask_audio(audio: UploadFile = File(...), language: str = LANG_CODE, x_
     if not user_text.strip():
         raise HTTPException(status_code=400, detail="No se pudo transcribir el audio.")
     nlu = detect_intent_and_slots(user_text)
+    session["last_slots"] = nlu.get("slots", {})
     ctx = retrieve_context(user_text, 40)
     answer = compose_answer(nlu["intent"], user_text, ctx, session)
     session["last_intent"] = nlu["intent"]
-    session["last_slots"] = nlu["slots"]
     mp3 = tts_mp3(answer, language_code=language)
     return {
         "texto_usuario": user_text,
         "respuesta_texto": answer,
         "audio_base64": base64.b64encode(mp3).decode("utf-8"),
         "mime": "audio/mpeg",
-        "used_sections": list(ctx.keys()),
+        "used_sections": list(ctx.keys())["tblInvitados"] if ctx else [],
         "intent": nlu["intent"],
         "session_id": sid,
     }
@@ -1298,7 +1066,6 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
     sid, session = _get_session(None, x_session_id)
     try:
         raw = await audio.read()
-        # Validate WAV file
         try:
             with wave.open(io.BytesIO(raw), 'rb') as wf:
                 nchannels, sampwidth, framerate = wf.getnchannels(), wf.getsampwidth(), wf.getframerate()
@@ -1307,21 +1074,16 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
         except wave.Error as e:
             raise HTTPException(status_code=400, detail=f"Error al procesar el archivo WAV: {str(e)}")
 
-        # Transcribe audio to text
         user_text = stt_wav_linear16(raw, language_code=language)
         if not user_text.strip():
             raise HTTPException(status_code=400, detail="No se pudo transcribir el audio (WAV).")
 
-        # Process intent and context
         nlu = detect_intent_and_slots(user_text)
+        session["last_slots"] = nlu.get("slots", {})
         ctx = retrieve_context(user_text, max_items=40)
         answer = compose_answer(nlu["intent"], user_text, ctx, session)
-
-        # Update session
         session["last_intent"] = nlu["intent"]
-        session["last_slots"] = nlu.get("slots", {})
 
-        # Synthesize response to WAV
         wav_bytes = tts_wav_linear16(answer, language_code=language)
 
         return {
@@ -1329,7 +1091,7 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
             "respuesta_texto": answer,
             "audio_wav_base64": base64.b64encode(wav_bytes).decode("utf-8"),
             "mime": "audio/wav",
-            "used_sections": list(ctx.keys()),
+            "used_sections": list(ctx.keys())["tblInvitados"] if ctx else [],
             "intent": nlu["intent"],
             "session_id": sid,
         }
