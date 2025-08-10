@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+requests
+pydantic
+python-multipart
+google-cloud-speech
+google-cloud-texttospeech
+python-dotenv
+pandas
+fuzzywuzzy
+python-Levenshtein
+
+

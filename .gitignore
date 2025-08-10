@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+# Muy importante no subir credenciales
+boda-468518-b90568d47e6d.json

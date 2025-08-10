@@ -1,0 +1,19 @@
+{
+    "liveServer.settings.port": 5501,
+    "sqltools.connections": [
+        {
+            "mysqlOptions": {
+                "authProtocol": "default",
+                "enableSsl": "Disabled"
+            },
+            "previewLimit": 50,
+            "server": "64.202.185.148",
+            "port": 3306,
+            "driver": "MariaDB",
+            "name": "prestamos",
+            "database": "costmexico_adminPFCash",
+            "username": "costmexico_adminCash",
+            "password": "i&lSlYH{TL#RW!fu"
+        }
+    ]
+}
