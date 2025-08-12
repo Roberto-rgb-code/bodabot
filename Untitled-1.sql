@@ -1,0 +1,3 @@
+SELECT *
+FROM [dbo].[tblInvitados]
+FOR JSON PATH, INCLUDE_NULL_VALUES;

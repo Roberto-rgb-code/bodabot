@@ -15,8 +15,6 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 
 # =========================
 # Cargar .env
@@ -37,6 +35,7 @@ LANG_CODE = os.getenv("LANG_CODE", "es-MX")
 TTS_VOICE = os.getenv("TTS_VOICE", "es-MX-Neural2-D")
 TTS_VOICE_FALLBACK = os.getenv("TTS_VOICE_FALLBACK", "es-MX-Standard-C")
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
+MESA_TIPS_PATH = Path(os.getenv("MESA_TIPS_PATH", "")) if os.getenv("MESA_TIPS_PATH") else None
 
 # =========================
 # Google SDKs (STT/TTS)
@@ -47,7 +46,7 @@ from google.cloud import texttospeech
 # =========================
 # FastAPI
 # =========================
-app = FastAPI(title="BodaBot API (Invitados & Anfitrión)", version="4.6-scope")
+app = FastAPI(title="BodaBot API (Invitados & Anfitrión)", version="4.7-guest")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,12 +55,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.mount("/static", StaticFiles(directory="."), name="static")
-
-@app.get("/", include_in_schema=False)
-def read_index():
-    return FileResponse('index.html')
 
 # =========================
 # Memoria en runtime
@@ -72,6 +65,7 @@ INVERTED: Dict[str, List[Tuple[str, int]]] = defaultdict(list)
 SCHEMA: Dict[str, List[Dict[str, str]]] = {}
 SESSIONS: Dict[str, Dict[str, Any]] = defaultdict(dict)
 DEFAULT_SESSION = "default"
+MESA_TIPS: Dict[int, str] = {}
 
 WORD_RE = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9@._+-]+")
 DATE_RE = re.compile(
@@ -241,6 +235,21 @@ def _extract_tbl_invitados(obj: Any) -> List[Dict[str, Any]]:
                 return res
     return []
 
+def _load_mesa_tips() -> None:
+    MESA_TIPS.clear()
+    if MESA_TIPS_PATH and MESA_TIPS_PATH.exists():
+        try:
+            with MESA_TIPS_PATH.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            # aceptar {"12": "frente a pista"} o {12: "frente a pista"}
+            for k, v in data.items():
+                try:
+                    MESA_TIPS[int(k)] = str(v)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
 def load_data() -> None:
     if not DATA_PATH.exists():
         raise RuntimeError(f"No se encontró data.json en: {DATA_PATH}")
@@ -261,6 +270,7 @@ def load_data() -> None:
 
     _register_table("tblInvitados", invitados_data or [])
     _build_inverted()
+    _load_mesa_tips()
 
 # Carga inicial
 load_data()
@@ -335,7 +345,7 @@ def gnlp_classify_text(text: str, language: str = "es") -> Dict[str, Any]:
     return r.json()
 
 # =========================
-# NLU mejorado + SCOPE
+# NLU mejorado + SCOPE + MODO INVITADO
 # =========================
 GREETING_WORDS = {"hola", "buenos dias", "buenas tardes", "buenas noches", "hey", "qué tal", "que tal"}
 WHO_ARE_YOU = {"quien eres", "quién eres", "como te llamas", "cómo te llamas"}
@@ -346,41 +356,49 @@ FOLLOW_DETAILS = {"detalles", "detalle", "por tipo", "por mesa"}
 FIELD_SYNONYMS = {
     "telefono": ["tel", "teléfono", "telefono", "cel", "celular", "whatsapp", "whats"],
     "correo": ["correo", "mail", "email", "e-mail"],
-    "mesa": ["(mesa de)", "(que mesa)", "(qué mesa)"],  # solo como frase de persona
-    "boletos": ["boletos", "pases", "tickets"],
+    "mesa": ["(mesa de)", "(que mesa)", "(qué mesa)", "mi mesa"],
+    "boletos": ["boletos", "pases", "tickets", "mis boletos", "mis pases"],
     "boletosConfirmados": ["boletos confirmados", "pases confirmados", "tickets confirmados"],
     "apodo": ["apodo"],
     "nombre": ["nombre"],
-    "qrEnviado": ["qr enviado", "qr enviados", "codigo enviado", "código enviado", "codigos enviados", "códigos enviados"],
-    "qrConfirmado": ["qr confirmado", "qr confirmados", "codigo confirmado", "código confirmado", "codigos confirmados", "códigos confirmados"],
+    "qrEnviado": ["qr enviado", "qr enviados", "codigo enviado", "código enviado"],
+    "qrConfirmado": ["qr confirmado", "qr confirmados", "codigo confirmado", "código confirmado", "mi qr"],
     "asistira": ["asistira", "asistirá", "asisten", "asistiran", "asistirán", "confirmado", "confirmados"],
 }
 
-# stopwords para limpiar target_text (más robustas)
 STOPWORDS_FOR_TARGET = (
     r"telefono|tel[eé]fono|cel|celular|whatsapp|correo|email|mail|"
     r"mesa|boletos|boletos confirmados|"
-    r"qr|qr enviado|qr enviados|qr confirmado|qr confirmados|"
+    r"qr|qr enviado|qr enviados|qr confirmado|qr confirmados|mi qr|"
     r"confirmad(?:o|a|os|as)|enviad(?:o|a|os|as)|asistir(?:a|á|an|án)?|asisten|asistencia|"
     r"de|del|de la|de los|de las|para|por|con|"
     r"busca|dame|muestra|quiero|quien es|quién es|quienes|quiénes|"
-    r"datos|info|informaci[oó]n|ficha|contacto"
+    r"datos|info|informaci[oó]n|ficha|contacto|mi|soy|somos|me llamo|mi nombre es|mesa de"
 )
 
-def _has_mesa_filter(t: str) -> bool:
-    return bool(re.search(r"(?:^| )(?:invitados\s+)?(?:de\s+(?:la\s+)?)?mesa\s*#?\s*\d+\b", t)) or ("sin mesa" in t)
+SCOPES = ("mesas","invitados","boletos","confirmados","qr","solo_misa","contacto","ficha","general")
 
-def _has_mesas_grouping(t: str) -> bool:
-    return ("mesas" in t) or ("por mesa" in t)
+ADMIN_KEYWORDS = {"lista","invitados","confirmados","boletos","qr","mesa","mesas","sin mesa","correo","telefono","teléfono","email"}
 
-def _has_confirmados(t: str) -> bool:
-    return bool(re.search(r"\bconfirmad[oa]s?\b|\basistir(?:a|á|an|án)\b|\basiste[nrs]?\b", t))
-
-def _has_qr_enviado(t: str) -> bool:
-    return ("qr" in t and "enviad" in t)
-
-def _has_qr_confirmado(t: str) -> bool:
-    return ("qr" in t and "confirmad" in t)
+def determine_scope(t_text: str) -> str:
+    t = normalize(t_text)
+    if re.search(r"\b(ficha\s+de|^ficha\b|quien es|quién es)\b", t):
+        return "ficha"
+    if any(w in t for w in ["tel", "teléfono", "telefono", "correo", "email", "mail"]):
+        return "contacto"
+    if "solo misa" in t:
+        return "solo_misa"
+    if "bolet" in t:
+        return "boletos"
+    if "qr" in t or "código" in t or "codigo" in t:
+        return "qr"
+    if any(w in t for w in ["confirmado", "confirmados", "asistira", "asistirá", "asisten", "asistiran", "asistirán"]):
+        return "confirmados"
+    if "mesa" in t or "mesas" in t or "sin mesa" in t:
+        return "mesas"
+    if "invitado" in t or "lista" in t:
+        return "invitados"
+    return "general"
 
 def _meaningful_tokens(s: str) -> List[str]:
     toks = [w for w in tokenize(s) if len(w) >= 3 and w not in CONNECTORS]
@@ -388,8 +406,17 @@ def _meaningful_tokens(s: str) -> List[str]:
 
 def _match_field(text: str) -> Optional[str]:
     t = normalize(text)
+    # 'mi X' posesivo
+    if re.search(r"\bmi\s+mesa\b", t):
+        return "mesa"
+    if re.search(r"\bmi\s+qr\b", t):
+        return "qrConfirmado"
+    if re.search(r"\bmis\s+(boletos|pases)\b", t):
+        return "boletosConfirmados"
+    # 'mesa de', 'qué mesa'
     if re.search(r"\b(que|qué)\s+mesa\b|\bmesa\s+de\b", t):
         return "mesa"
+    # otros campos
     for field, words in FIELD_SYNONYMS.items():
         if field == "mesa":
             continue
@@ -414,32 +441,32 @@ def _looks_like_person_query(text: str) -> bool:
     tid, q = _extract_person_query(text)
     return bool(tid or EMAIL_RE.search(q) or len(_meaningful_tokens(q)) > 0)
 
-# ===== Scope detector =====
-SCOPES = ("mesas","invitados","boletos","confirmados","qr","solo_misa","contacto","ficha","general")
-
-def determine_scope(t_text: str) -> str:
-    t = normalize(t_text)
-    if re.search(r"\b(ficha\s+de|^ficha\b|quien es|quién es)\b", t):
-        return "ficha"
-    if any(w in t for w in ["tel", "teléfono", "telefono", "correo", "email", "mail"]):
-        return "contacto"
-    if "solo misa" in t:
-        return "solo_misa"
-    if "bolet" in t:
-        return "boletos"
-    if "qr" in t or "código" in t or "codigo" in t:
-        return "qr"
-    if any(w in t for w in ["confirmado", "confirmados", "asistira", "asistirá", "asisten", "asistiran", "asistirán"]):
-        return "confirmados"
-    if "mesa" in t or "mesas" in t or "sin mesa" in t:
-        return "mesas"
-    if "invitado" in t or "lista" in t:
-        return "invitados"
-    return "general"
+def _looks_like_guest_intro(t: str) -> Optional[str]:
+    # Detectar "soy X", "me llamo X", "mi nombre es X", "somos X"
+    m = re.search(r"\b(?:soy|me\s+llamo|mi\s+nombre\s+es|somos)\s+(.+)$", t)
+    if m:
+        return m.group(1).strip()
+    # "mesa de X"
+    m2 = re.search(r"\bmesa\s+de\s+(.+)$", t)
+    if m2:
+        return m2.group(1).strip()
+    # Nombre "a pelo": 2-4 tokens sin palabras admin
+    tokens = _meaningful_tokens(t)
+    if 1 < len(tokens) <= 4 and not any(k in t for k in ADMIN_KEYWORDS):
+        return t.strip()
+    return None
 
 def detect_intent_and_slots(text: str) -> Dict[str, Any]:
     t = normalize(text)
-    slots = {"date": parse_date(t), "entidades": [], "categorias": [], "field": None, "target_id": None, "target_text": "", "scope": determine_scope(t)}
+    slots = {
+        "date": parse_date(t),
+        "entidades": [],
+        "categorias": [],
+        "field": None,
+        "target_id": None,
+        "target_text": "",
+        "scope": determine_scope(t)
+    }
 
     if any(w in t for w in GREETING_WORDS):
         return {"intent": "greeting", "slots": slots}
@@ -452,12 +479,21 @@ def detect_intent_and_slots(text: str) -> Dict[str, Any]:
     if any(w in t for w in FOLLOW_DETAILS):
         return {"intent": "detalles_invitados", "slots": slots}
 
+    # MODO INVITADO: si parece que el invitado dijo su nombre
+    intro = _looks_like_guest_intro(t)
+    if intro:
+        slots["target_text"] = intro
+        return {"intent": "guest_quick", "slots": slots}
+
     # Filtros claros antes de fact_query
-    if _has_mesa_filter(t) or _has_mesas_grouping(t):
+    if re.search(r"(?:^| )(?:invitados\s+)?(?:de\s+(?:la\s+)?)?mesa\s*#?\s*\d+\b", t) or ("sin mesa" in t):
         return {"intent": "invitados", "slots": slots}
 
-    # Listados genéricos: confirmados / QR / boletos confirmados (sin persona) -> invitados
-    if (_has_confirmados(t) or _has_qr_enviado(t) or _has_qr_confirmado(t) or re.search(r"boletos\s+confirmad", t)):
+    # Listados genéricos
+    if (re.search(r"\bconfirmad[oa]s?\b|\basistir(?:a|á|an|án)\b|\basiste[nrs]?\b", t)
+        or ("qr" in t and "enviad" in t)
+        or ("qr" in t and "confirmad" in t)
+        or re.search(r"boletos\s+confirmad", t)):
         if not _looks_like_person_query(t):
             return {"intent": "invitados", "slots": slots}
 
@@ -481,7 +517,7 @@ def detect_intent_and_slots(text: str) -> Dict[str, Any]:
         slots["target_id"], slots["target_text"] = tid, q
         return {"intent": "detail_guest", "slots": slots}
 
-    # Campo de persona (tel/correo/mesa/boletos/qr) solo si parece consulta de persona
+    # Campo de persona
     fld = _match_field(t)
     if fld is not None and _looks_like_person_query(t):
         tid, q = _extract_person_query(t)
@@ -489,7 +525,7 @@ def detect_intent_and_slots(text: str) -> Dict[str, Any]:
         slots["target_id"], slots["target_text"] = tid, q
         return {"intent": "fact_query", "slots": slots}
 
-    # Palabras clave de invitados/invitación
+    # Palabras clave generales
     if any(k in t for k in [
         "invitado", "invitados", "lista de invitados", "lista", "buscar", "busca",
         "mesa", "mesas", "sin mesa",
@@ -514,6 +550,10 @@ def _nombre_completo(g: Dict[str, Any]) -> str:
          str(g.get("aPaterno") or "").strip(),
          str(g.get("aMaterno") or "").strip()]
     ).strip() or "(sin nombre)"
+
+def _first_name(g: Dict[str, Any]) -> str:
+    n = (g.get("nombre") or "").strip()
+    return n.split()[0] if n else _nombre_completo(g).split()[0]
 
 def _agg_boletos(rows: List[Dict[str, Any]]) -> Tuple[int, int]:
     total = sum(_int(g.get("boletos")) for g in rows)
@@ -615,12 +655,37 @@ def render_invitados_list(items: List[Dict[str, Any]], prefix: str = "Invitados:
         lines.append(f"\nMostrando {min(10,len(items))}/{len(items)} · di “más” para continuar.")
     return prefix + "\n".join(lines)
 
+def render_guest_welcome(g: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    mesa = _int(g.get("mesa"))
+    mesa_txt = str(mesa) if mesa > 0 else "—"
+    qr_env = "sí" if _bit(g.get("qrEnviado")) == 1 else "no"
+    qr_ok  = "sí" if _bit(g.get("qrConfirmado")) == 1 else "no"
+    bol_c  = _int(g.get("boletosConfirmados"))
+    nombre = _first_name(g)
+
+    # Compañeros de mesa (máx 6)
+    same = []
+    if mesa > 0:
+        same = [x for x in rows if _int(x.get("mesa")) == mesa and _int(x.get("idInvitado")) != _int(g.get("idInvitado"))]
+        same = same[:6]
+    names = ", ".join(_nombre_completo(x) for x in same) if same else "—"
+
+    tip = MESA_TIPS.get(mesa, "")
+    tip_line = f"\n📝 Tip: {tip}" if tip else ""
+
+    return (f"¡Bienvenid@, {nombre}! 🎉\n"
+            f"🍽️ Tu mesa: {mesa_txt}\n"
+            f"🎟️ Boletos confirmados: {bol_c}\n"
+            f"✉️ QR enviado: {qr_env} · ✔️ QR confirmado: {qr_ok}\n"
+            f"👥 En tu mesa también: {names}"
+            f"{tip_line}")
+
 # =========================
 # Respuestas
 # =========================
 def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[str, Any]) -> str:
     if intent == "greeting":
-        return "¡Hola! Soy BodaBot 💍. Pídeme cosas de invitados, mesas, confirmaciones, QR o boletos y te digo. 😉" + _suggest_next()
+        return "¡Hola! Soy BodaBot 💍. Pídeme cosas de invitados, mesas, confirmaciones, QR o boletos. Si eres invitado, dime: “soy [tu nombre]”. 😉" + _suggest_next()
     if intent == "who_are_you":
         return "Soy BodaBot, tu asistente de invitados. Puedo listar, buscar, contar y darte detalles (tel/correo/mesa/QR/boletos)."
     if intent == "help":
@@ -630,7 +695,7 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
                 "• Boletos: “boletos”, “boletos confirmados”\n"
                 "• Mesas: “invitados de la mesa 5”, “sin mesa”, “mesas (por mesa)”\n"
                 "• QR: “qr enviados”, “qr confirmados”\n"
-                "• Búsqueda: “ficha de Farah”, “correo gmail”, “tel 333”" + _suggest_next())
+                "• Invitado: “soy Karla Calleros”, “mesa de Juan Romo”, “mi mesa” (después de identificarte)" + _suggest_next())
 
     rows = TABLES.get("tblInvitados", [])
     if not rows:
@@ -664,6 +729,20 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             return render_invitados_list(nxt, prefix="Más:\n", cols=("index","nombre","id","mesa"))
         return "No hay una lista previa para continuar."
 
+    # ===== MODO INVITADO: “soy X”, “me llamo X”, “mesa de X” o nombre a pelo
+    if intent == "guest_quick":
+        from_slots = session.get("last_slots") or {}
+        target_text = from_slots.get("target_text", "")
+        cand = _find_guest_by_id_or_text(rows, None, target_text)
+        if not cand:
+            return "No te encontré. ¿Me dices tu nombre tal como aparece en la invitación? 🙏"
+        if len(cand) > 1:
+            session["last"] = {"type": "invitados", "candidates": cand, "shown": min(10,len(cand)), "display": cand[:10]}
+            return "Encontré varios, ¿cuál eres?\n\n" + render_invitados_list(cand[:10], cols=("index","nombre","id","mesa")) + "\n\nPuedes decir: “soy el #2”."
+        g = cand[0]
+        session["guest_id"] = _int(g.get("idInvitado"))
+        return render_guest_welcome(g, rows)
+
     # Detalle: “quién es …” o “ficha de …”
     if intent == "detail_guest":
         from_slots = session.get("last_slots") or {}
@@ -681,16 +760,19 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         g = cand[0]
         return render_guest_card(g)
 
-    # Campo de persona: teléfono/correo/mesa/boletos/qr…
+    # Campo de persona: teléfono/correo/mesa/boletos/qr… (soporta “mi X” usando sesión)
     if intent == "fact_query":
         field = session.get("last_slots", {}).get("field")
         target_id = session.get("last_slots", {}).get("target_id")
         target_text = session.get("last_slots", {}).get("target_text", "")
+
+        # Si no dieron persona y ya se identificó antes
+        if not (target_id or target_text):
+            if session.get("guest_id"):
+                target_id = session["guest_id"]
+
         if not field:
             field = _match_field(t)
-        if not (target_id or target_text):
-            tid2, q2 = _extract_person_query(t)
-            target_id, target_text = tid2, q2
 
         cand = _find_guest_by_id_or_text(rows, target_id, target_text)
         if not cand:
@@ -700,7 +782,9 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             return sample
 
         g = cand[0]
+        session["guest_id"] = _int(g.get("idInvitado"))
         nombre = _nombre_completo(g)
+
         if field == "telefono":
             return f"📞 Teléfono de {nombre}: { _format_phone(g.get('telefono') or '—') }"
         if field == "correo":
@@ -713,12 +797,10 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             return f"🎟️ Boletos asignados a {nombre}: { _int(g.get('boletos')) }"
         if field == "boletosConfirmados":
             return f"✅ Boletos confirmados de {nombre}: { _int(g.get('boletosConfirmados')) }"
-        if field == "qrEnviado":
-            val = "sí" if _bit(g.get("qrEnviado")) == 1 else "no"
-            return f"✉️ ¿QR enviado para {nombre}?: {val}"
-        if field == "qrConfirmado":
-            val = "sí" if _bit(g.get("qrConfirmado")) == 1 else "no"
-            return f"✔️ ¿QR confirmado para {nombre}?: {val}"
+        if field in ("qrEnviado","qrConfirmado"):
+            env = "sí" if _bit(g.get("qrEnviado")) == 1 else "no"
+            ok  = "sí" if _bit(g.get("qrConfirmado")) == 1 else "no"
+            return f"✉️ QR enviado: {env} · ✔️ QR confirmado: {ok} (de {nombre})"
         if field == "apodo":
             return f"🧾 Apodo de {nombre}: { g.get('apodo') or '—' }"
         if field == "nombre":
@@ -744,7 +826,6 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         if scope == "solo_misa":
             n = sum(1 for g in rows if _bit(g.get("soloMisa")) == 1)
             return f"Solo misa: {n}"
-        # genérico
         n = len(rows)
         return f"Invitados: {n}"
 
@@ -754,39 +835,32 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         faltan = max(0, total_boletos - total_boletos_conf)
         return f"🎟️ Faltan **{faltan}** boletos por confirmar (Totales: {total_boletos} · Confirmados: {total_boletos_conf})."
 
-    # Vista / filtros (incluye combinados)
+    # Vista / filtros
     if intent in ("detalles_invitados", "invitados"):
         filtered = rows
 
-        # Mesa específica
         m = re.search(r"(?:de\s+(?:la\s+)?)?mesa\s*#?\s*(\d+)", t)
         mesa_val = int(m.group(1)) if m else None
         if mesa_val is not None:
             filtered = [g for g in filtered if _int(g.get("mesa")) == mesa_val]
 
-        # Sin mesa
         if "sin mesa" in t:
             filtered = [g for g in filtered if _int(g.get("mesa")) == 0]
 
-        # Confirmados (asistirá)
-        if _has_confirmados(t):
+        if re.search(r"\bconfirmad[oa]s?\b|\basistir(?:a|á|an|án)\b|\basiste[nrs]?\b", t):
             filtered = [g for g in filtered if _bit(g.get("asistira")) == 1]
 
-        # Solo misa
         if re.search(r"\bsolo\s+misa\b", t):
             filtered = [g for g in filtered if _bit(g.get("soloMisa")) == 1]
 
-        # QR
-        if _has_qr_enviado(t):
+        if ("qr" in t and "enviad" in t):
             filtered = [g for g in filtered if _bit(g.get("qrEnviado")) == 1]
-        if _has_qr_confirmado(t):
+        if ("qr" in t and "confirmad" in t):
             filtered = [g for g in filtered if _bit(g.get("qrConfirmado")) == 1]
 
-        # Boletos confirmados
         if re.search(r"\bboletos\s+confirmad", t):
             filtered = [g for g in filtered if _int(g.get("boletosConfirmados")) > 0]
 
-        # Prefijo de teléfono
         m_tel = re.search(r"\b(?:tel(?:efono)?|cel|celular|whats(?:app)?)\s*([0-9]{2,})", t)
         if m_tel:
             phone_prefix = m_tel.group(1)
@@ -795,7 +869,6 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
                 return phone_prefix in digits
             filtered = [g for g in filtered if phone_has_prefix(g)]
 
-        # Búsqueda libre por nombre/correo/teléfono
         wants_boletos = "boletos" in t
         name_like_raw = re.sub(
             r"\b(invitados?|lista|buscar|busca|de|la|el|los|las|por|mesa|mesas|confirmad[oa]s?|asistir[aá](?:n)?|asisten|qr|boletos|sin mesa|email|correo|tel[eé]fono|tel|cel|celular|whats(?:app)?)\b",
@@ -816,14 +889,11 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         page = filtered[:10]
         session["last"] = {"type": "invitados", "candidates": filtered, "shown": len(page), "display": page}
 
-        # Plantillas por scope (sin mezclar temas)
         if scope == "mesas":
-            # breakdown por mesa si no pidieron una mesa concreta y no es "sin mesa"
             if mesa_val is None and "sin mesa" not in t:
                 bd = _mesas_breakdown(filtered)
                 top = [f"Mesa {k or 0}: {v}" for k, v in list(bd.items())[:80]]
                 return header_scoped(scope, len(bd)) + "\n\n" + ("Por mesa:\n" + "\n".join(top) if top else "—")
-            # invitados de una mesa específica o sin mesa → lista simple
             return header_scoped(scope, len(filtered)) + "\n\n" + render_invitados_list(page, cols=("index","nombre","id","mesa"))
 
         elif scope == "invitados":
@@ -842,8 +912,8 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             return header_scoped(scope, len(only_mass)) + "\n\n" + render_invitados_list(page2, cols=("index","nombre","id","mesa"))
 
         elif scope == "qr":
-            want_enviados = _has_qr_enviado(t)
-            want_confirmados = _has_qr_confirmado(t)
+            want_enviados = ("qr" in t and "enviad" in t)
+            want_confirmados = ("qr" in t and "confirmad" in t)
             if want_enviados and not want_confirmados:
                 only = [g for g in filtered if _bit(g.get("qrEnviado")) == 1]
                 return header_scoped(scope, len(only)) + " · enviados\n\n" + render_invitados_list(only[:10], cols=("index","nombre","id"))
@@ -864,12 +934,11 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
                         render_invitados_list(only[:10], cols=("index","nombre","id")))
             return header_scoped(scope, 1) + f"\n\nTotales: {total_boletos} · Confirmados: {total_boletos_conf} · Faltan: {faltan}"
 
-        # fallback general
         return f"{header_scoped('general', len(filtered))}\n\n" + render_invitados_list(page, cols=("index","nombre","id","mesa"))
 
     ctx_preview = len(ctx.get("tblInvitados", []))
     return (f"Listo para ayudarte con **tblInvitados** (contexto: {ctx_preview} registros).\n"
-            f"Ejemplos: “lista de invitados”, “confirmados”, “boletos”, “invitados de la mesa 4”, “sin mesa”, “qr confirmados”, “ficha de Farah”."
+            f"Ejemplos: “soy Karla Calleros”, “mi mesa”, “lista de invitados”, “confirmados”, “boletos”, “invitados de la mesa 4”, “qr confirmados”, “ficha de Farah”."
             + _suggest_next())
 
 # =========================
@@ -963,6 +1032,11 @@ class AskResponse(BaseModel):
     intent: str
     session_id: str
 
+class GuestCheckinRequest(BaseModel):
+    idInvitado: Optional[int] = None
+    nombre: Optional[str] = None
+    arrived: Optional[bool] = True
+
 # =========================
 # Endpoints
 # =========================
@@ -970,11 +1044,11 @@ class AskResponse(BaseModel):
 def root():
     return {
         "name": "BodaBot API (Invitados & Anfitrión)",
-        "version": "4.6-scope",
+        "version": "4.7-guest",
         "endpoints": [
             "/health", "/schema", "/tables", "/table/{name}", "/search",
             "/invitados/summary", "/invitados/find", "/invitados/{idInvitado}",
-            "/ask", "/ask_audio", "/ask_audio_wav", "/refresh"
+            "/ask", "/ask_audio", "/ask_audio_wav", "/guest/checkin", "/refresh"
         ],
     }
 
@@ -991,6 +1065,7 @@ def health():
         "lang_code": LANG_CODE,
         "tts_voice": TTS_VOICE,
         "cors_origins": CORS_ORIGINS,
+        "mesa_tips_loaded": bool(MESA_TIPS)
     }
 
 @app.get("/schema")
@@ -1174,3 +1249,35 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error procesando la solicitud de audio: {str(e)}")
+
+# =========================
+# Guest Check-in (opcional)
+# =========================
+@app.post("/guest/checkin")
+def guest_checkin(req: GuestCheckinRequest, x_session_id: Optional[str] = Header(None)):
+    rows = TABLES.get("tblInvitados", [])
+    if not rows:
+        raise HTTPException(status_code=400, detail="No hay invitados cargados.")
+    guest = None
+    if req.idInvitado:
+        cand = _find_guest_by_id_or_text(rows, req.idInvitado, "")
+        guest = cand[0] if cand else None
+    elif req.nombre:
+        cand = _find_guest_by_id_or_text(rows, None, req.nombre)
+        if cand:
+            guest = cand[0]
+    if not guest:
+        raise HTTPException(status_code=404, detail="Invitado no encontrado.")
+
+    # marcar check-in en memoria
+    guest["asistioBoda"] = 1 if (req.arrived is None or req.arrived) else 0
+    guest["accedio"] = datetime.now().isoformat(timespec="seconds")
+
+    return {
+        "ok": True,
+        "idInvitado": _int(guest.get("idInvitado")),
+        "nombre": _nombre_completo(guest),
+        "mesa": _int(guest.get("mesa")),
+        "asistioBoda": _bit(guest.get("asistioBoda")),
+        "mensaje": "Check-in registrado (memoria en runtime)."
+    }
