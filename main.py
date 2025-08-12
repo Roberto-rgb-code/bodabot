@@ -15,6 +15,8 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 # =========================
 # Cargar .env
@@ -55,6 +57,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Servir archivos estáticos y el index.html
+app.mount("/static", StaticFiles(directory="."), name="static")
+
+@app.get("/", include_in_schema=False)
+def read_index():
+    return FileResponse('index.html')
 
 # =========================
 # Memoria en runtime

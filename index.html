@@ -846,7 +846,7 @@
             constructor() {
                 this.isListening = false;
                 this.isProcessing = false;
-                this.apiUrl = 'http://127.0.0.1:8001';
+                this.apiUrl = window.location.origin;
                 this.conversationHistory = [];
                 
                 // Prompts sugeridos por categoría (nuevo)
