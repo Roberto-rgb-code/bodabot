@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+
 # =========================
 # Cargar .env
 # =========================
@@ -48,7 +49,7 @@ from google.cloud import texttospeech
 # =========================
 # FastAPI
 # =========================
-app = FastAPI(title="BodaBot API (Invitados & Anfitrión)", version="4.7-guest")
+app = FastAPI(title="BodaBot API (Invitados & Anfitrión)", version="4.8-guest-cancel-autopick")
 
 app.add_middleware(
     CORSMiddleware,
@@ -250,7 +251,6 @@ def _load_mesa_tips() -> None:
         try:
             with MESA_TIPS_PATH.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            # aceptar {"12": "frente a pista"} o {12: "frente a pista"}
             for k, v in data.items():
                 try:
                     MESA_TIPS[int(k)] = str(v)
@@ -354,13 +354,18 @@ def gnlp_classify_text(text: str, language: str = "es") -> Dict[str, Any]:
     return r.json()
 
 # =========================
-# NLU mejorado + SCOPE + MODO INVITADO
+# NLU mejorado + SCOPE + MODO INVITADO + CONTROL DE AUDIO
 # =========================
 GREETING_WORDS = {"hola", "buenos dias", "buenas tardes", "buenas noches", "hey", "qué tal", "que tal"}
 WHO_ARE_YOU = {"quien eres", "quién eres", "como te llamas", "cómo te llamas"}
 HELP_WORDS = {"ayuda", "que puedes hacer", "qué puedes hacer", "ayudame", "ayúdame", "como funcionas", "cómo funcionas"}
 FOLLOW_MORE = {"mas", "más", "siguiente", "otra", "otro", "muestrame mas", "muéstrame más"}
 FOLLOW_DETAILS = {"detalles", "detalle", "por tipo", "por mesa"}
+
+# Control de audio
+CANCEL_WORDS = {"cancelar", "cancela", "cancélalo", "ya no", "alto", "detente", "para", "stop"}
+MUTE_ON_WORDS = {"silencio", "mute", "cállate", "callate", "sin voz", "sin sonido", "no hables", "apaga voz"}
+MUTE_OFF_WORDS = {"habla", "con voz", "activa voz", "quitar silencio", "quita silencio", "desmute", "enciende voz"}
 
 FIELD_SYNONYMS = {
     "telefono": ["tel", "teléfono", "telefono", "cel", "celular", "whatsapp", "whats"],
@@ -386,7 +391,6 @@ STOPWORDS_FOR_TARGET = (
 )
 
 SCOPES = ("mesas","invitados","boletos","confirmados","qr","solo_misa","contacto","ficha","general")
-
 ADMIN_KEYWORDS = {"lista","invitados","confirmados","boletos","qr","mesa","mesas","sin mesa","correo","telefono","teléfono","email"}
 
 def determine_scope(t_text: str) -> str:
@@ -465,6 +469,20 @@ def _looks_like_guest_intro(t: str) -> Optional[str]:
         return t.strip()
     return None
 
+def _is_cancel(text: str) -> bool:
+    t = normalize(text)
+    return any(w in t for w in CANCEL_WORDS)
+
+def _parse_pick_index(text: str) -> Optional[int]:
+    t = normalize(text)
+    m = re.search(r"(?:^|\b)(?:soy\s+(?:el|la)\s+|opci[oó]n\s+|#|num(?:ero)?\s*)(\d+)\b", t)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+    return None
+
 def detect_intent_and_slots(text: str) -> Dict[str, Any]:
     t = normalize(text)
     slots = {
@@ -483,6 +501,21 @@ def detect_intent_and_slots(text: str) -> Dict[str, Any]:
         return {"intent": "who_are_you", "slots": slots}
     if any(w in t for w in HELP_WORDS):
         return {"intent": "help", "slots": slots}
+
+    # Audio control primero
+    if _is_cancel(t):
+        return {"intent": "cancel", "slots": slots}
+    if any(w in t for w in MUTE_ON_WORDS):
+        return {"intent": "mute_on", "slots": slots}
+    if any(w in t for w in MUTE_OFF_WORDS):
+        return {"intent": "mute_off", "slots": slots}
+
+    # Selección por índice: "soy el #2"
+    pick = _parse_pick_index(t)
+    if pick is not None:
+        slots["pick_index"] = pick
+        return {"intent": "pick_candidate", "slots": slots}
+
     if any(w in t for w in FOLLOW_MORE):
         return {"intent": "follow_more", "slots": slots}
     if any(w in t for w in FOLLOW_DETAILS):
@@ -616,6 +649,28 @@ def _find_guest_by_id_or_text(rows: List[Dict[str, Any]], target_id: Optional[in
     cand.sort(key=lambda g: score(g), reverse=True)
     return cand
 
+def _auto_pick_best(candidates: List[Dict[str, Any]], query_text: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Devuelve (mejor, ambiguo). Siempre selecciona un mejor intento; 'ambiguo' True
+    si la diferencia no es clara."""
+    if not candidates:
+        return None, True
+    if len(candidates) == 1:
+        return candidates[0], False
+    q = normalize(query_text or "")
+    def score(g):
+        return max(
+            fuzz.token_set_ratio(q, normalize(_nombre_completo(g))),
+            fuzz.partial_ratio(q, normalize(g.get("correo") or "")),
+            fuzz.partial_ratio(q, normalize(g.get("telefono") or "")),
+        )
+    scored = [(g, score(g)) for g in candidates]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top, s1 = scored[0]
+    s2 = scored[1][1] if len(scored) > 1 else 0
+    exact = q and (q == normalize(_nombre_completo(top)) or q in normalize(_nombre_completo(top)))
+    clear = exact or s1 >= 92 or (s1 - s2 >= 12 and s1 >= 80)
+    return top, (not clear)
+
 # =========================
 # Render helpers
 # =========================
@@ -706,6 +761,17 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
                 "• QR: “qr enviados”, “qr confirmados”\n"
                 "• Invitado: “soy Karla Calleros”, “mesa de Juan Romo”, “mi mesa” (después de identificarte)" + _suggest_next())
 
+    # Audio control intents
+    if intent == "cancel":
+        session["cancel"] = True
+        return "✅ Cancelado."
+    if intent == "mute_on":
+        session["mute"] = True
+        return "🔇 Ok, silencio activado. Seguiré respondiendo sin voz hasta que digas “habla”."
+    if intent == "mute_off":
+        session["mute"] = False
+        return "🔈 Voz activada."
+
     rows = TABLES.get("tblInvitados", [])
     if not rows:
         return "No hay datos en **tblInvitados**. Asegúrate de que `data.json` incluya esa tabla o un array de invitados."
@@ -738,6 +804,19 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             return render_invitados_list(nxt, prefix="Más:\n", cols=("index","nombre","id","mesa"))
         return "No hay una lista previa para continuar."
 
+    # Selección por índice tras una lista
+    if intent == "pick_candidate":
+        pick_idx = (session.get("last_slots") or {}).get("pick_index")
+        last = session.get("last", {})
+        cand = last.get("candidates") or []
+        if not cand:
+            return "No tengo una lista previa para elegir."
+        if not pick_idx or pick_idx < 1 or pick_idx > len(cand):
+            return "Número fuera de rango. Di algo como “soy el #2”."
+        g = cand[pick_idx - 1]
+        session["guest_id"] = _int(g.get("idInvitado"))
+        return render_guest_welcome(g, rows)
+
     # ===== MODO INVITADO: “soy X”, “me llamo X”, “mesa de X” o nombre a pelo
     if intent == "guest_quick":
         from_slots = session.get("last_slots") or {}
@@ -745,12 +824,14 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         cand = _find_guest_by_id_or_text(rows, None, target_text)
         if not cand:
             return "No te encontré. ¿Me dices tu nombre tal como aparece en la invitación? 🙏"
-        if len(cand) > 1:
-            session["last"] = {"type": "invitados", "candidates": cand, "shown": min(10,len(cand)), "display": cand[:10]}
-            return "Encontré varios, ¿cuál eres?\n\n" + render_invitados_list(cand[:10], cols=("index","nombre","id","mesa")) + "\n\nPuedes decir: “soy el #2”."
-        g = cand[0]
-        session["guest_id"] = _int(g.get("idInvitado"))
-        return render_guest_welcome(g, rows)
+        best, ambiguous = _auto_pick_best(cand, target_text)
+        if not best:
+            return "No te encontré. ¿Me dices tu nombre tal como aparece en la invitación? 🙏"
+        session["guest_id"] = _int(best.get("idInvitado"))
+        msg = render_guest_welcome(best, rows)
+        if ambiguous:
+            msg += "\n\n( Si no eres esa persona, dime tu apellido o tu ID. )"
+        return msg
 
     # Detalle: “quién es …” o “ficha de …”
     if intent == "detail_guest":
@@ -763,11 +844,12 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         cand = _find_guest_by_id_or_text(rows, target_id, target_text)
         if not cand:
             return "No encontré a esa persona. ¿Me das nombre, correo, teléfono o el ID? 😊"
-        if len(cand) > 1:
-            top = cand[:5]
-            return render_invitados_list(top, prefix="Encontré varios, ¿cuál de estos es?\n", cols=("index","nombre","id","mesa"))
-        g = cand[0]
-        return render_guest_card(g)
+        best, ambiguous = _auto_pick_best(cand, target_text)
+        g = best
+        msg = render_guest_card(g)
+        if ambiguous:
+            msg += "\n\n( Si no te referías a esta persona, dime su apellido o su ID. )"
+        return msg
 
     # Campo de persona: teléfono/correo/mesa/boletos/qr… (soporta “mi X” usando sesión)
     if intent == "fact_query":
@@ -786,35 +868,38 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         cand = _find_guest_by_id_or_text(rows, target_id, target_text)
         if not cand:
             return "No pude ubicar a esa persona. ¿Me repites nombre, correo o ID? 🙏"
-        if len(cand) > 1:
-            sample = render_invitados_list(cand[:5], prefix="Encontré varios, ¿cuál de estos es?\n", cols=("index","nombre","id","mesa"))
-            return sample
 
-        g = cand[0]
+        best, ambiguous = _auto_pick_best(cand, target_text or "")
+        g = best
         session["guest_id"] = _int(g.get("idInvitado"))
         nombre = _nombre_completo(g)
 
         if field == "telefono":
-            return f"📞 Teléfono de {nombre}: { _format_phone(g.get('telefono') or '—') }"
-        if field == "correo":
-            return f"📧 Correo de {nombre}: { g.get('correo') or '—' }"
-        if field == "mesa":
+            msg = f"📞 Teléfono de {nombre}: { _format_phone(g.get('telefono') or '—') }"
+        elif field == "correo":
+            msg = f"📧 Correo de {nombre}: { g.get('correo') or '—' }"
+        elif field == "mesa":
             mesa = _int(g.get("mesa"))
             mesa_txt = mesa if mesa > 0 else "—"
-            return f"🍽️ Mesa de {nombre}: {mesa_txt}"
-        if field == "boletos":
-            return f"🎟️ Boletos asignados a {nombre}: { _int(g.get('boletos')) }"
-        if field == "boletosConfirmados":
-            return f"✅ Boletos confirmados de {nombre}: { _int(g.get('boletosConfirmados')) }"
-        if field in ("qrEnviado","qrConfirmado"):
+            msg = f"🍽️ Mesa de {nombre}: {mesa_txt}"
+        elif field == "boletos":
+            msg = f"🎟️ Boletos asignados a {nombre}: { _int(g.get('boletos')) }"
+        elif field == "boletosConfirmados":
+            msg = f"✅ Boletos confirmados de {nombre}: { _int(g.get('boletosConfirmados')) }"
+        elif field in ("qrEnviado","qrConfirmado"):
             env = "sí" if _bit(g.get("qrEnviado")) == 1 else "no"
             ok  = "sí" if _bit(g.get("qrConfirmado")) == 1 else "no"
-            return f"✉️ QR enviado: {env} · ✔️ QR confirmado: {ok} (de {nombre})"
-        if field == "apodo":
-            return f"🧾 Apodo de {nombre}: { g.get('apodo') or '—' }"
-        if field == "nombre":
-            return f"👤 Nombre completo: { nombre }"
-        return "Puedo darte: teléfono, correo, mesa, boletos, boletos confirmados, QR enviado/confirmado, apodo o nombre." + _suggest_next()
+            msg = f"✉️ QR enviado: {env} · ✔️ QR confirmado: {ok} (de {nombre})"
+        elif field == "apodo":
+            msg = f"🧾 Apodo de {nombre}: { g.get('apodo') or '—' }"
+        elif field == "nombre":
+            msg = f"👤 Nombre completo: { nombre }"
+        else:
+            msg = "Puedo darte: teléfono, correo, mesa, boletos, boletos confirmados, QR enviado/confirmado, apodo o nombre." + _suggest_next()
+
+        if ambiguous:
+            msg += "\n\n( Si no es la persona correcta, dime su apellido o su ID. )"
+        return msg
 
     # Conteo general (temático)
     if intent == "count_query":
@@ -1046,6 +1131,9 @@ class GuestCheckinRequest(BaseModel):
     nombre: Optional[str] = None
     arrived: Optional[bool] = True
 
+class MuteRequest(BaseModel):
+    enabled: bool
+
 # =========================
 # Endpoints
 # =========================
@@ -1053,11 +1141,13 @@ class GuestCheckinRequest(BaseModel):
 def root():
     return {
         "name": "BodaBot API (Invitados & Anfitrión)",
-        "version": "4.7-guest",
+        "version": "4.8-guest-cancel-autopick",
         "endpoints": [
             "/health", "/schema", "/tables", "/table/{name}", "/search",
             "/invitados/summary", "/invitados/find", "/invitados/{idInvitado}",
-            "/ask", "/ask_audio", "/ask_audio_wav", "/guest/checkin", "/refresh"
+            "/ask", "/ask_audio", "/ask_audio_wav",
+            "/audio/mute", "/audio/cancel",
+            "/guest/checkin", "/refresh"
         ],
     }
 
@@ -1211,15 +1301,25 @@ async def ask_audio(audio: UploadFile = File(...), language: str = LANG_CODE, x_
     ctx = retrieve_context(user_text, 40)
     answer = compose_answer(nlu["intent"], user_text, ctx, session)
     session["last_intent"] = nlu["intent"]
-    mp3 = tts_mp3(answer, language_code=language)
+
+    muted = bool(session.get("mute"))
+    cancelled = bool(session.pop("cancel", False) or nlu["intent"] == "cancel")
+
+    audio_b64 = ""
+    if not muted and not cancelled:
+        mp3 = tts_mp3(answer, language_code=language)
+        audio_b64 = base64.b64encode(mp3).decode("utf-8")
+
     return {
         "texto_usuario": user_text,
         "respuesta_texto": answer,
-        "audio_base64": base64.b64encode(mp3).decode("utf-8"),
-        "mime": "audio/mpeg",
+        "audio_base64": audio_b64,
+        "mime": "audio/mpeg" if audio_b64 else None,
         "used_sections": list(ctx.keys()),
         "intent": nlu["intent"],
         "session_id": sid,
+        "muted": muted,
+        "cancelled": cancelled,
     }
 
 @app.post("/ask_audio_wav")
@@ -1245,25 +1345,56 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
         answer = compose_answer(nlu["intent"], user_text, ctx, session)
         session["last_intent"] = nlu["intent"]
 
-        wav_bytes = tts_wav_linear16(answer, language_code=language)
+        muted = bool(session.get("mute"))
+        cancelled = bool(session.pop("cancel", False) or nlu["intent"] == "cancel")
+
+        audio_b64 = ""
+        mime = None
+        if not muted and not cancelled:
+            wav_bytes = tts_wav_linear16(answer, language_code=language)
+            audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
+            mime = "audio/wav"
 
         return {
             "texto_usuario": user_text,
             "respuesta_texto": answer,
-            "audio_wav_base64": base64.b64encode(wav_bytes).decode("utf-8"),
-            "mime": "audio/wav",
+            "audio_wav_base64": audio_b64,
+            "mime": mime,
             "used_sections": list(ctx.keys()),
             "intent": nlu["intent"],
             "session_id": sid,
+            "muted": muted,
+            "cancelled": cancelled,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error procesando la solicitud de audio: {str(e)}")
 
 # =========================
+# Audio controls (REST)
+# =========================
+@app.post("/audio/mute")
+def audio_mute(req: MuteRequest, x_session_id: Optional[str] = Header(None)):
+    sid, session = _get_session(None, x_session_id)
+    session["mute"] = bool(req.enabled)
+    return {"ok": True, "muted": session["mute"], "session_id": sid}
+
+@app.post("/audio/cancel")
+def audio_cancel(x_session_id: Optional[str] = Header(None)):
+    sid, session = _get_session(None, x_session_id)
+    session["cancel"] = True
+    return {"ok": True, "cancelled": True, "session_id": sid}
+
+# =========================
 # Guest Check-in (opcional)
 # =========================
+class GuestCard(BaseModel):
+    idInvitado: int
+    nombre: str
+    mesa: int
+    asistioBoda: int
+
 @app.post("/guest/checkin")
-def guest_checkin(req: GuestCheckinRequest, x_session_id: Optional[str] = Header(None)):
+def guest_checkin(req: GuestCheckinRequest, x_session_id: Optional[str] = Header(None)) -> Dict[str, Any]:
     rows = TABLES.get("tblInvitados", [])
     if not rows:
         raise HTTPException(status_code=400, detail="No hay invitados cargados.")
@@ -1274,7 +1405,7 @@ def guest_checkin(req: GuestCheckinRequest, x_session_id: Optional[str] = Header
     elif req.nombre:
         cand = _find_guest_by_id_or_text(rows, None, req.nombre)
         if cand:
-            guest = cand[0]
+            guest = _auto_pick_best(cand, req.nombre)[0]
     if not guest:
         raise HTTPException(status_code=404, detail="Invitado no encontrado.")
 
