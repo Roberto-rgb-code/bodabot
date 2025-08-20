@@ -790,6 +790,14 @@
                 <button class="control-btn btn-secondary" id="settingsBtn">
                     ⚙️ Configuración
                 </button>
+                <!-- 👇 NUEVOS BOTONES -->
+                <button class="control-btn btn-secondary" id="muteBtn">
+                    🔇 Silencio
+                </button>
+                <button class="control-btn btn-secondary" id="cancelSpeechBtn">
+                    ⏹️ Cancelar Voz
+                </button>
+                <!-- ☝️ FIN NUEVOS BOTONES -->
             </div>
 
             <!-- Estado -->
@@ -1437,6 +1445,54 @@
                 this.removeWelcomeMessage();
                 return originalAddUserMessage.call(this, text);
             };
+
+            /* =====================
+               NUEVO: MUTE & CANCEL
+               ===================== */
+
+            // Estado persistente para el mute
+            chatBot.voiceMuted = localStorage.getItem('bodabot_voiceMuted') === 'true';
+
+            // Referencias a los botones recién agregados
+            const muteBtn = document.getElementById('muteBtn');
+            const cancelSpeechBtn = document.getElementById('cancelSpeechBtn');
+
+            // Sin tocar el método original dentro de la clase, lo envolvemos
+            const originalSpeak = chatBot.speakResponse;
+            chatBot.speakResponse = function(text) {
+                if (this.voiceMuted) return; // no hablar si está en silencio
+                return originalSpeak.call(this, text);
+            };
+
+            // Sincroniza texto del botón Mute
+            const syncMuteUI = () => {
+                if (!muteBtn) return;
+                muteBtn.textContent = chatBot.voiceMuted ? '🔊 Con Voz' : '🔇 Silencio';
+                muteBtn.title = chatBot.voiceMuted ? 'Desactivar silencio' : 'Activar silencio';
+            };
+            syncMuteUI();
+
+            // Click en Mute
+            if (muteBtn) {
+                muteBtn.addEventListener('click', () => {
+                    chatBot.voiceMuted = !chatBot.voiceMuted;
+                    localStorage.setItem('bodabot_voiceMuted', chatBot.voiceMuted ? 'true' : 'false');
+                    syncMuteUI();
+                    chatBot.addSystemMessage(chatBot.voiceMuted ? '🔇 Voz silenciada. No leeré en voz alta.' : '🔊 Voz activada.');
+                });
+            }
+
+            // Click en Cancelar voz
+            if (cancelSpeechBtn) {
+                cancelSpeechBtn.addEventListener('click', () => {
+                    try {
+                        if ('speechSynthesis' in window) speechSynthesis.cancel();
+                    } catch (e) {}
+                    chatBot.stopListening(); // por si estaba escuchando
+                    chatBot.updateStatus('🛑 Reproducción detenida', '');
+                    chatBot.addSystemMessage('⏹️ Voz detenida.');
+                });
+            }
         });
     </script>
 </body>
