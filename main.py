@@ -1080,10 +1080,43 @@ def pcm16le_to_wav_bytes(pcm: bytes, sample_rate: int = 16000, channels: int = 1
         wf.writeframes(pcm)
     return buff.getvalue()
 
+# ===== NUEVO: Sanitizado de emojis para TTS =====
+# Eliminamos emojis, símbolos pictográficos y marcadores de variación para que no se pronuncien.
+EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # Emoticons
+    "\U0001F300-\U0001F5FF"  # Símbolos y pictogramas
+    "\U0001F680-\U0001F6FF"  # Transporte y mapas
+    "\U0001F1E0-\U0001F1FF"  # Banderas
+    "\U00002700-\U000027BF"  # Dingbats
+    "\U0001F900-\U0001F9FF"  # Símbolos suplementarios
+    "\U00002600-\U000026FF"  # Símbolos misceláneos
+    "\U00002B00-\U00002BFF"  # Flechas, etc.
+    "\U00002300-\U000023FF"  # Técnicos misceláneos
+    "\U0001FA70-\U0001FAFF"  # Extensiones
+    "\U0001F700-\U0001F77F"  # Alquímicos
+    "]",
+    flags=re.UNICODE
+)
+
+def strip_emojis_for_tts(text: str) -> str:
+    if not text:
+        return text
+    # Quitar ZWJ y variation selectors que forman emojis compuestos
+    text = re.sub(r"[\u200D\uFE0E\uFE0F]", "", text)
+    # Quitar emojis / pictogramas
+    text = EMOJI_RE.sub("", text)
+    # Normalizar espacios múltiples resultantes
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text
+# ===== FIN NUEVO =====
+
 def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str] = None) -> bytes:
     cli = tts_client()
     voice_name = voice_name or TTS_VOICE_FALLBACK
-    synthesis_in = texttospeech.SynthesisInput(text=text)
+    # Aplicar sanitizado para evitar pronunciación de emojis
+    clean_text = strip_emojis_for_tts(text)
+    synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
         language_code=language_code,
         name=voice_name,
@@ -1096,7 +1129,9 @@ def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str]
 def tts_wav_linear16(text: str, language_code: str = LANG_CODE, voice_name: Optional[str] = None) -> bytes:
     cli = tts_client()
     voice_name = voice_name or TTS_VOICE
-    synthesis_in = texttospeech.SynthesisInput(text=text)
+    # Aplicar sanitizado para evitar pronunciación de emojis
+    clean_text = strip_emojis_for_tts(text)
+    synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
         language_code=language_code,
         name=voice_name,
