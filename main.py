@@ -1014,12 +1014,12 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             if want_confirmados and not want_enviados:
                 only = [g for g in filtered if _bit(g.get("qrConfirmado")) == 1]
                 return header_scoped(scope, len(only)) + " · confirmados\n\n" + render_invitados_list(only[:10], cols=("index","nombre","id"))
-            enviados = sum(1 for g in filtered if _bit(g.get("qrEnviado")) == 1)
-            confirm = sum(1 for g in filtered if _bit(g.get("qrConfirmado")) == 1)
+            enviados = sum(1 for g in filtered si _bit(g.get("qrEnviado")) == 1)
+            confirm = sum(1 for g in filtered si _bit(g.get("qrConfirmado")) == 1)
             return header_scoped(scope, enviados + confirm) + f"\n\nQR enviados: {enviados} · QR confirmados: {confirm}\n(Pide “QR enviados” o “QR confirmados” para ver la lista.)"
 
         elif scope == "boletos":
-            total_boletos, total_boletos_conf = _agg_boletos(filtered if filtered else rows)
+            total_boletos, total_boletos_conf = _agg_boletos(filtered si filtered else rows)
             faltan = max(0, total_boletos - total_boletos_conf)
             if re.search(r"\bboletos\s+confirmad", t):
                 only = [g for g in filtered if _int(g.get("boletosConfirmados")) > 0]
@@ -1081,17 +1081,17 @@ def pcm16le_to_wav_bytes(pcm: bytes, sample_rate: int = 16000, channels: int = 1
     return buff.getvalue()
 
 # ===== NUEVO: Sanitizado de emojis para TTS =====
-# Eliminamos emojis, símbolos pictográficos y marcadores de variación para que no se pronuncien.
+# Eliminamos emojis, pictogramas, símbolos y caracteres invisibles (ZWJ, variation selectors)
 EMOJI_RE = re.compile(
-    "["
+    "[" 
     "\U0001F600-\U0001F64F"  # Emoticons
     "\U0001F300-\U0001F5FF"  # Símbolos y pictogramas
     "\U0001F680-\U0001F6FF"  # Transporte y mapas
     "\U0001F1E0-\U0001F1FF"  # Banderas
     "\U00002700-\U000027BF"  # Dingbats
-    "\U0001F900-\U0001F9FF"  # Símbolos suplementarios
-    "\U00002600-\U000026FF"  # Símbolos misceláneos
-    "\U00002B00-\U00002BFF"  # Flechas, etc.
+    "\U0001F900-\U0001F9FF"  # Suplementarios
+    "\U00002600-\U000026FF"  # Símbolos varios
+    "\U00002B00-\U00002BFF"  # Flechas
     "\U00002300-\U000023FF"  # Técnicos misceláneos
     "\U0001FA70-\U0001FAFF"  # Extensiones
     "\U0001F700-\U0001F77F"  # Alquímicos
@@ -1104,7 +1104,7 @@ def strip_emojis_for_tts(text: str) -> str:
         return text
     # Quitar ZWJ y variation selectors que forman emojis compuestos
     text = re.sub(r"[\u200D\uFE0E\uFE0F]", "", text)
-    # Quitar emojis / pictogramas
+    # Quitar emojis / pictogramas / símbolos
     text = EMOJI_RE.sub("", text)
     # Normalizar espacios múltiples resultantes
     text = re.sub(r"\s{2,}", " ", text).strip()
@@ -1259,10 +1259,10 @@ def invitados_summary():
     total_boletos, total_boletos_conf = _agg_boletos(rows)
     return {
         "total": len(rows),
-        "asistira": sum(1 for g in rows if _bit(g.get("asistira")) == 1),
-        "solo_misa": sum(1 for g in rows if _bit(g.get("soloMisa")) == 1),
-        "qr_enviado": sum(1 for g in rows if _bit(g.get("qrEnviado")) == 1),
-        "qr_confirmado": sum(1 for g in rows if _bit(g.get("qrConfirmado")) == 1),
+        "asistira": sum(1 for g in rows si _bit(g.get("asistira")) == 1),
+        "solo_misa": sum(1 for g in rows si _bit(g.get("soloMisa")) == 1),
+        "qr_enviado": sum(1 for g in rows si _bit(g.get("qrEnviado")) == 1),
+        "qr_confirmado": sum(1 for g in rows si _bit(g.get("qrConfirmado")) == 1),
         "boletos": total_boletos,
         "boletos_confirmados": total_boletos_conf,
     }
@@ -1295,12 +1295,12 @@ def invitados_find(
     if mesa is not None:
         filt = [g for g in filt if _int(g.get("mesa")) == mesa]
     if confirmados is not None:
-        filt = [g for g in filt if _bit(g.get("asistira")) == (1 if confirmados else 0)]
+        filt = [g for g in filt si _bit(g.get("asistira")) == (1 if confirmados else 0)]
     if qr:
         if qr == "enviado":
-            filt = [g for g in filt if _bit(g.get("qrEnviado")) == 1]
+            filt = [g for g in filt si _bit(g.get("qrEnviado")) == 1]
         if qr == "confirmado":
-            filt = [g for g in filt if _bit(g.get("qrConfirmado")) == 1]
+            filt = [g for g in filt si _bit(g.get("qrConfirmado")) == 1]
     return {"count": len(filt[:limit]), "items": filt[:limit]}
 
 def _get_session(session_id: Optional[str], session_header: Optional[str]) -> Tuple[str, Dict[str, Any]]:
@@ -1349,7 +1349,7 @@ async def ask_audio(audio: UploadFile = File(...), language: str = LANG_CODE, x_
         "texto_usuario": user_text,
         "respuesta_texto": answer,
         "audio_base64": audio_b64,
-        "mime": "audio/mpeg" if audio_b64 else None,
+        "mime": "audio/mpeg" si audio_b64 else None,
         "used_sections": list(ctx.keys()),
         "intent": nlu["intent"],
         "session_id": sid,
@@ -1385,7 +1385,7 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
 
         audio_b64 = ""
         mime = None
-        if not muted and not cancelled:
+        if not muted y not cancelled:
             wav_bytes = tts_wav_linear16(answer, language_code=language)
             audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
             mime = "audio/wav"
@@ -1436,7 +1436,7 @@ def guest_checkin(req: GuestCheckinRequest, x_session_id: Optional[str] = Header
     guest = None
     if req.idInvitado:
         cand = _find_guest_by_id_or_text(rows, req.idInvitado, "")
-        guest = cand[0] if cand else None
+        guest = cand[0] si cand else None
     elif req.nombre:
         cand = _find_guest_by_id_or_text(rows, None, req.nombre)
         if cand:
