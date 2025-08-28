@@ -39,6 +39,8 @@ TTS_VOICE = os.getenv("TTS_VOICE", "es-MX-Neural2-D")
 TTS_VOICE_FALLBACK = os.getenv("TTS_VOICE_FALLBACK", "es-MX-Standard-C")
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
 MESA_TIPS_PATH = Path(os.getenv("MESA_TIPS_PATH", "")) if os.getenv("MESA_TIPS_PATH") else None
+# NUEVO: quitar emojis también del TEXTO si se desea
+STRIP_EMOJIS_IN_TEXT = (os.getenv("STRIP_EMOJIS_IN_TEXT", "0").strip().lower() in ("1","true","yes","on"))
 
 # =========================
 # Google SDKs (STT/TTS)
@@ -49,7 +51,7 @@ from google.cloud import texttospeech
 # =========================
 # FastAPI
 # =========================
-app = FastAPI(title="BodaBot API (Invitados & Anfitrión)", version="4.8-guest-cancel-autopick")
+app = FastAPI(title="BodaBot API (Invitados & Anfitrión)", version="4.9-no-emoji-text-opt")
 
 app.add_middleware(
     CORSMiddleware,
@@ -650,8 +652,6 @@ def _find_guest_by_id_or_text(rows: List[Dict[str, Any]], target_id: Optional[in
     return cand
 
 def _auto_pick_best(candidates: List[Dict[str, Any]], query_text: str) -> Tuple[Optional[Dict[str, Any]], bool]:
-    """Devuelve (mejor, ambiguo). Siempre selecciona un mejor intento; 'ambiguo' True
-    si la diferencia no es clara."""
     if not candidates:
         return None, True
     if len(candidates) == 1:
@@ -737,7 +737,8 @@ def render_guest_welcome(g: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
     tip = MESA_TIPS.get(mesa, "")
     tip_line = f"\n📝 Tip: {tip}" if tip else ""
 
-    return (f"¡Bienvenid@, {nombre}! 🎉\n"
+    # SIN '@' y SIN emoji en la línea de saludo
+    return (f"¡Qué gusto verte, {nombre}!\n"
             f"🍽️ Tu mesa: {mesa_txt}\n"
             f"🎟️ Boletos confirmados: {bol_c}\n"
             f"✉️ QR enviado: {qr_env} · ✔️ QR confirmado: {qr_ok}\n"
@@ -817,7 +818,7 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         session["guest_id"] = _int(g.get("idInvitado"))
         return render_guest_welcome(g, rows)
 
-    # ===== MODO INVITADO: “soy X”, “me llamo X”, “mesa de X” o nombre a pelo
+    # ===== MODO INVITADO: “soy X”...
     if intent == "guest_quick":
         from_slots = session.get("last_slots") or {}
         target_text = from_slots.get("target_text", "")
@@ -833,7 +834,7 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             msg += "\n\n( Si no eres esa persona, dime tu apellido o tu ID. )"
         return msg
 
-    # Detalle: “quién es …” o “ficha de …”
+    # Detalle
     if intent == "detail_guest":
         from_slots = session.get("last_slots") or {}
         target_id = from_slots.get("target_id")
@@ -851,13 +852,12 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             msg += "\n\n( Si no te referías a esta persona, dime su apellido o su ID. )"
         return msg
 
-    # Campo de persona: teléfono/correo/mesa/boletos/qr… (soporta “mi X” usando sesión)
+    # Campo de persona
     if intent == "fact_query":
         field = session.get("last_slots", {}).get("field")
         target_id = session.get("last_slots", {}).get("target_id")
         target_text = session.get("last_slots", {}).get("target_text", "")
 
-        # Si no dieron persona y ya se identificó antes
         if not (target_id or target_text):
             if session.get("guest_id"):
                 target_id = session["guest_id"]
@@ -901,7 +901,7 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
             msg += "\n\n( Si no es la persona correcta, dime su apellido o su ID. )"
         return msg
 
-    # Conteo general (temático)
+    # Conteos
     if intent == "count_query":
         if scope == "confirmados":
             n = sum(1 for g in rows if _bit(g.get("asistira")) == 1)
@@ -923,7 +923,6 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
         n = len(rows)
         return f"Invitados: {n}"
 
-    # Conteo específico
     if intent == "count_boletos_faltan":
         total_boletos, total_boletos_conf = _agg_boletos(rows)
         faltan = max(0, total_boletos - total_boletos_conf)
@@ -963,7 +962,6 @@ def compose_answer(intent: str, text: str, ctx: Dict[str, Any], session: Dict[st
                 return phone_prefix in digits
             filtered = [g for g in filtered if phone_has_prefix(g)]
 
-        wants_boletos = "boletos" in t
         name_like_raw = re.sub(
             r"\b(invitados?|lista|buscar|busca|de|la|el|los|las|por|mesa|mesas|confirmad[oa]s?|asistir[aá](?:n)?|asisten|qr|boletos|sin mesa|email|correo|tel[eé]fono|tel|cel|celular|whats(?:app)?)\b",
             "", t
@@ -1080,8 +1078,7 @@ def pcm16le_to_wav_bytes(pcm: bytes, sample_rate: int = 16000, channels: int = 1
         wf.writeframes(pcm)
     return buff.getvalue()
 
-# ===== NUEVO: Sanitizado de emojis para TTS =====
-# Eliminamos emojis, pictogramas, símbolos y caracteres invisibles (ZWJ, variation selectors)
+# ===== Sanitizado de emojis para TTS =====
 EMOJI_RE = re.compile(
     "[" 
     "\U0001F600-\U0001F64F"  # Emoticons
@@ -1102,19 +1099,17 @@ EMOJI_RE = re.compile(
 def strip_emojis_for_tts(text: str) -> str:
     if not text:
         return text
-    # Quitar ZWJ y variation selectors que forman emojis compuestos
+    # Quitar ZWJ y variation selectors
     text = re.sub(r"[\u200D\uFE0E\uFE0F]", "", text)
     # Quitar emojis / pictogramas / símbolos
     text = EMOJI_RE.sub("", text)
-    # Normalizar espacios múltiples resultantes
+    # Normalizar espacios
     text = re.sub(r"\s{2,}", " ", text).strip()
     return text
-# ===== FIN NUEVO =====
 
 def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str] = None) -> bytes:
     cli = tts_client()
     voice_name = voice_name or TTS_VOICE_FALLBACK
-    # Aplicar sanitizado para evitar pronunciación de emojis
     clean_text = strip_emojis_for_tts(text)
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
@@ -1129,7 +1124,6 @@ def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str]
 def tts_wav_linear16(text: str, language_code: str = LANG_CODE, voice_name: Optional[str] = None) -> bytes:
     cli = tts_client()
     voice_name = voice_name or TTS_VOICE
-    # Aplicar sanitizado para evitar pronunciación de emojis
     clean_text = strip_emojis_for_tts(text)
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
@@ -1176,7 +1170,7 @@ class MuteRequest(BaseModel):
 def root():
     return {
         "name": "BodaBot API (Invitados & Anfitrión)",
-        "version": "4.8-guest-cancel-autopick",
+        "version": "4.9-no-emoji-text-opt",
         "endpoints": [
             "/health", "/schema", "/tables", "/table/{name}", "/search",
             "/invitados/summary", "/invitados/find", "/invitados/{idInvitado}",
@@ -1199,7 +1193,8 @@ def health():
         "lang_code": LANG_CODE,
         "tts_voice": TTS_VOICE,
         "cors_origins": CORS_ORIGINS,
-        "mesa_tips_loaded": bool(MESA_TIPS)
+        "mesa_tips_loaded": bool(MESA_TIPS),
+        "strip_emojis_in_text": STRIP_EMOJIS_IN_TEXT,
     }
 
 @app.get("/schema")
@@ -1313,8 +1308,12 @@ def ask(req: AskRequest, x_session_id: Optional[str] = Header(None)):
     nlu = detect_intent_and_slots(req.question)
     session["last_slots"] = nlu.get("slots", {})
     ctx = retrieve_context(req.question, req.max_ctx_items or 40)
-    answer = compose_answer(nlu["intent"], req.question, ctx, session)
+    raw_answer = compose_answer(nlu["intent"], req.question, ctx, session)
     session["last_intent"] = nlu["intent"]
+
+    # Opcional: quitar emojis también del TEXTO
+    answer = strip_emojis_for_tts(raw_answer) if STRIP_EMOJIS_IN_TEXT else raw_answer
+
     return AskResponse(
         model="google-nlp",
         answer=answer,
@@ -1334,7 +1333,7 @@ async def ask_audio(audio: UploadFile = File(...), language: str = LANG_CODE, x_
     nlu = detect_intent_and_slots(user_text)
     session["last_slots"] = nlu.get("slots", {})
     ctx = retrieve_context(user_text, 40)
-    answer = compose_answer(nlu["intent"], user_text, ctx, session)
+    answer_full = compose_answer(nlu["intent"], user_text, ctx, session)
     session["last_intent"] = nlu["intent"]
 
     muted = bool(session.get("mute"))
@@ -1342,12 +1341,15 @@ async def ask_audio(audio: UploadFile = File(...), language: str = LANG_CODE, x_
 
     audio_b64 = ""
     if not muted and not cancelled:
-        mp3 = tts_mp3(answer, language_code=language)
+        mp3 = tts_mp3(answer_full, language_code=language)
         audio_b64 = base64.b64encode(mp3).decode("utf-8")
+
+    # Texto devuelto (opcional sin emojis)
+    answer_text = strip_emojis_for_tts(answer_full) if STRIP_EMOJIS_IN_TEXT else answer_full
 
     return {
         "texto_usuario": user_text,
-        "respuesta_texto": answer,
+        "respuesta_texto": answer_text,
         "audio_base64": audio_b64,
         "mime": "audio/mpeg" if audio_b64 else None,
         "used_sections": list(ctx.keys()),
@@ -1377,7 +1379,7 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
         nlu = detect_intent_and_slots(user_text)
         session["last_slots"] = nlu.get("slots", {})
         ctx = retrieve_context(user_text, max_items=40)
-        answer = compose_answer(nlu["intent"], user_text, ctx, session)
+        answer_full = compose_answer(nlu["intent"], user_text, ctx, session)
         session["last_intent"] = nlu["intent"]
 
         muted = bool(session.get("mute"))
@@ -1386,13 +1388,16 @@ async def ask_audio_wav(audio: UploadFile = File(...), language: str = LANG_CODE
         audio_b64 = ""
         mime = None
         if not muted and not cancelled:
-            wav_bytes = tts_wav_linear16(answer, language_code=language)
+            wav_bytes = tts_wav_linear16(answer_full, language_code=language)
             audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
             mime = "audio/wav"
 
+        # Texto devuelto (opcional sin emojis)
+        answer_text = strip_emojis_for_tts(answer_full) if STRIP_EMOJIS_IN_TEXT else answer_full
+
         return {
             "texto_usuario": user_text,
-            "respuesta_texto": answer,
+            "respuesta_texto": answer_text,
             "audio_wav_base64": audio_b64,
             "mime": mime,
             "used_sections": list(ctx.keys()),
@@ -1444,7 +1449,6 @@ def guest_checkin(req: GuestCheckinRequest, x_session_id: Optional[str] = Header
     if not guest:
         raise HTTPException(status_code=404, detail="Invitado no encontrado.")
 
-    # marcar check-in en memoria
     guest["asistioBoda"] = 1 if (req.arrived is None or req.arrived) else 0
     guest["accedio"] = datetime.now().isoformat(timespec="seconds")
 
