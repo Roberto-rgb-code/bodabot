@@ -36,7 +36,7 @@ if GOOGLE_APPLICATION_CREDENTIALS:
 GOOGLE_API_KEY = (os.getenv("GOOGLE_API_KEY") or "").strip()
 LANG_CODE = os.getenv("LANG_CODE", "es-ES")
 TTS_VOICE = os.getenv("TTS_VOICE", "es-ES-Chirp-HD-F")
-TTS_VOICE_FALLBACK = os.getenv("TTS_VOICE_FALLBACK", "es-ES-Neural2-B")
+TTS_VOICE_FALLBACK = os.getenv("TTS_VOICE_FALLBACK", "es-ES-Chirp-HD-F")
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
 MESA_TIPS_PATH = Path(os.getenv("MESA_TIPS_PATH", "")) if os.getenv("MESA_TIPS_PATH") else None
 
