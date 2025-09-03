@@ -38,7 +38,7 @@ GOOGLE_API_KEY = "AIzaSyAKWV2JvFvIwfKZRKYxLkuahY2aD2UJcUQ"
 LANG_CODE = "es-ES"
 TTS_VOICE = "es-ES-Chirp-HD-F"  # Voz femenina moderna premium
 TTS_VOICE_FALLBACK = "es-ES-Chirp-HD-F"  # Voz femenina alternativa premium
-CORS_ORIGINS = ["*"]
+CORS_ORIGINS = ["https://bodabot-9st7.onrender.com", "http://127.0.0.1:8000"]
 MESA_TIPS_PATH = None
 
 # =========================
