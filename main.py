@@ -36,8 +36,8 @@ if GOOGLE_APPLICATION_CREDENTIALS:
 # CONFIGURACIÓN DIRECTA - VOCES FEMENINAS MODERNAS
 GOOGLE_API_KEY = "AIzaSyAKWV2JvFvIwfKZRKYxLkuahY2aD2UJcUQ"
 LANG_CODE = "es-ES"
-TTS_VOICE = "es-ES-Chirp-HD-F"  # Voz femenina moderna premium
-TTS_VOICE_FALLBACK = "es-ES-Chirp-HD-F"  # Voz femenina alternativa premium
+TTS_VOICE = "es-ES-Wavenet-F"  # Voz femenina moderna premium
+TTS_VOICE_FALLBACK = "es-ES-Wavenet-F"  # Voz femenina alternativa premium
 CORS_ORIGINS = ["https://bodabot-9st7.onrender.com", "http://127.0.0.1:8000"]
 MESA_TIPS_PATH = None
 
@@ -1090,7 +1090,7 @@ def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str]
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
         language_code=language_code,
-        name="es-ES-Chirp-HD-F",  # Usa el nombre de la voz fija aquí
+        name="es-ES-Wavenet-F",  # Usa el nombre de la voz fija aquí
         ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
     )
     cfg = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
@@ -1103,7 +1103,7 @@ def tts_wav_linear16(text: str, language_code: str = LANG_CODE, voice_name: Opti
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
         language_code=language_code,
-        name="es-ES-Chirp-HD-F",  # Usa el nombre de la voz fijo aquí
+        name="es-ES-Wavenet-F",  # Usa el nombre de la voz fijo aquí
         ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
     )
     cfg = texttospeech.AudioConfig(
