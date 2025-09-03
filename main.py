@@ -1085,12 +1085,12 @@ def strip_emojis_for_tts(text: str) -> str:
 
 def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str] = None) -> bytes:
     cli = tts_client()
-    voice_name = voice_name or TTS_VOICE_FALLBACK
+    # voice_name = voice_name or TTS_VOICE_FALLBACK  # Elimina esta línea
     clean_text = strip_emojis_for_tts(text)
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
         language_code=language_code,
-        name=voice_name,
+        name="es-ES-Chirp-HD-F",  # Usa el nombre de la voz fija aquí
         ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
     )
     cfg = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
@@ -1099,12 +1099,11 @@ def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str]
 
 def tts_wav_linear16(text: str, language_code: str = LANG_CODE, voice_name: Optional[str] = None) -> bytes:
     cli = tts_client()
-    voice_name = voice_name or TTS_VOICE
     clean_text = strip_emojis_for_tts(text)
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
     voice = texttospeech.VoiceSelectionParams(
         language_code=language_code,
-        name=voice_name,
+        name="es-ES-Chirp-HD-F",  # Usa el nombre de la voz fijo aquí
         ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
     )
     cfg = texttospeech.AudioConfig(
