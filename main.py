@@ -1084,16 +1084,20 @@ def strip_emojis_for_tts(text: str) -> str:
     text = re.sub(r"\s{2,}", " ", text).strip()
     return text
 
+def _choose_voice(language_code: str, voice_name: Optional[str]) -> texttospeech.VoiceSelectionParams:
+    # Prioridad: parámetro explícito > TTS_VOICE > TTS_VOICE_FALLBACK
+    name = (voice_name or TTS_VOICE or TTS_VOICE_FALLBACK).strip()
+    # Si el nombre incluye locale (p.ej. es-ES-...), úsalo como language_code
+    lang_from_name = "-".join(name.split("-")[:2]) if "-" in name else None
+    lang = lang_from_name or language_code or LANG_CODE
+    return texttospeech.VoiceSelectionParams(language_code=lang, name=name)
+
+
 def tts_mp3(text: str, language_code: str = LANG_CODE, voice_name: Optional[str] = None) -> bytes:
     cli = tts_client()
-    # voice_name = voice_name or TTS_VOICE_FALLBACK  # Elimina esta línea
     clean_text = strip_emojis_for_tts(text)
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
-    voice = texttospeech.VoiceSelectionParams(
-        language_code=language_code,
-        name="es-ES-Wavenet-F",  # Usa el nombre de la voz fija aquí
-        ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
-    )
+    voice = _choose_voice(language_code, voice_name)
     cfg = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
     out = cli.synthesize_speech(input=synthesis_in, voice=voice, audio_config=cfg)
     return out.audio_content
@@ -1102,11 +1106,7 @@ def tts_wav_linear16(text: str, language_code: str = LANG_CODE, voice_name: Opti
     cli = tts_client()
     clean_text = strip_emojis_for_tts(text)
     synthesis_in = texttospeech.SynthesisInput(text=clean_text)
-    voice = texttospeech.VoiceSelectionParams(
-        language_code=language_code,
-        name="es-ES-Wavenet-F",  # Usa el nombre de la voz fijo aquí
-        ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
-    )
+    voice = _choose_voice(language_code, voice_name)
     cfg = texttospeech.AudioConfig(
         audio_encoding=texttospeech.AudioEncoding.LINEAR16,
         sample_rate_hertz=16000
