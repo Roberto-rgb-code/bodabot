@@ -683,6 +683,27 @@
             cursor: pointer;
         }
 
+        /* Voice panel */
+        .voice-panel{
+          position:fixed; inset:0; background:rgba(0,0,0,.25);
+          backdrop-filter: blur(2px);
+          display:none; align-items:center; justify-content:center;
+          z-index:1000;
+        }
+        .voice-panel-card{
+          width:min(520px,92vw);
+          background:#fff; border-radius:18px; padding:24px;
+          box-shadow:0 20px 60px rgba(139,95,191,.25);
+          border:1px solid rgba(139,95,191,.2);
+        }
+        .voice-panel-card h3{ margin:0 0 14px; color:var(--primary-purple)}
+        .voice-panel-card label{ display:block; margin:12px 0 6px; color:var(--warm-gray); font-weight:600}
+        .voice-panel-card select{
+          width:100%; padding:12px; border-radius:12px;
+          border:1px solid rgba(139,95,191,.25); background:#fff;
+        }
+        .voice-actions{ display:flex; gap:10px; margin-top:16px; }
+
         /* Responsive Design */
         @media (max-width: 1200px) {
             .assistant-panel {
@@ -790,6 +811,9 @@
                 <button class="control-btn btn-secondary" id="settingsBtn">
                     ⚙️ Configuración
                 </button>
+                <button class="control-btn btn-secondary" id="changeVoiceBtn">
+                    🎙️ Voz
+                </button>
                 <!-- 👇 NUEVOS BOTONES -->
                 <button class="control-btn btn-secondary" id="muteBtn">
                     🔇 Silencio
@@ -849,6 +873,32 @@
         </div>
     </div>
 
+    <!-- Panel de selección de voz -->
+    <div id="voicePanel" class="voice-panel">
+      <div class="voice-panel-card">
+        <h3>Selecciona la voz</h3>
+
+        <label>Voz del servidor (Google TTS)</label>
+        <select id="serverVoiceSelect">
+          <option value="">(usar predeterminada del backend)</option>
+          <option value="es-ES-Neural2-H">es-ES-Neural2-H</option>
+          <option value="es-ES-Neural2-F">es-ES-Neural2-F</option>
+          <option value="es-ES-Neural2-C">es-ES-Neural2-C</option>
+          <option value="es-MX-Neural2-F">es-MX-Neural2-F</option>
+          <option value="es-MX-Neural2-B">es-MX-Neural2-B</option>
+        </select>
+
+        <label>Voz del navegador (fallback)</label>
+        <select id="browserVoiceSelect"></select>
+
+        <div class="voice-actions">
+          <button id="voiceSaveBtn" class="control-btn btn-primary">Guardar</button>
+          <button id="voiceTestBtn" class="control-btn btn-secondary">Probar</button>
+          <button id="voiceCloseBtn" class="control-btn btn-secondary">Cerrar</button>
+        </div>
+      </div>
+    </div>
+
     <script>
         class PremiumWeddingChatBot {
             constructor() {
@@ -856,6 +906,10 @@
                 this.isProcessing = false;
                 this.apiUrl = window.location.origin;
                 this.conversationHistory = [];
+
+                // Persistencia de voces seleccionadas
+                this.serverVoiceName  = localStorage.getItem('bodabot_serverVoiceName')  || '';
+                this.browserVoiceName = localStorage.getItem('bodabot_browserVoiceName') || '';
                 
                 // Prompts sugeridos por categoría (nuevo)
                 this.PROMPTS = {
@@ -924,41 +978,76 @@
                 this.promptShelf = document.getElementById('promptShelf');
                 this.promptChips = document.getElementById('promptChips');
                 this.promptCategory = document.getElementById('promptCategory');
+
+                // elementos de voz (nuevo)
+                this.changeVoiceBtn     = document.getElementById('changeVoiceBtn');
+                this.voicePanel         = document.getElementById('voicePanel');
+                this.serverVoiceSelect  = document.getElementById('serverVoiceSelect');
+                this.browserVoiceSelect = document.getElementById('browserVoiceSelect');
+                this.voiceSaveBtn       = document.getElementById('voiceSaveBtn');
+                this.voiceCloseBtn      = document.getElementById('voiceCloseBtn');
+                this.voiceTestBtn       = document.getElementById('voiceTestBtn');
             }
 
             async playServerTTS(text) {
-  try {
-    if (this.voiceMuted) return;
-    const resp = await fetch(`${this.apiUrl}/tts`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        text,
-        language: 'es-ES',   // Debe coincidir con LANG_CODE del backend si tu TTS_VOICE es es-ES-...
-        voice_name: null,    // Null para que use TTS_VOICE del backend
-        format: 'mp3'
-      })
-    });
-    if (!resp.ok) throw new Error('TTS server error');
-    const data = await resp.json();
-    if (data.audio_base64 && data.mime) {
-      const audio = new Audio(`data:${data.mime};base64,${data.audio_base64}`);
-      await audio.play().catch(()=>{});
-    }
-  } catch (e) {
-    // Fallback: si el servidor TTS falla, usa la voz del navegador
-    if ('speechSynthesis' in window) {
-      this.speakResponse(text);
-    }
-  }
-}
+              try {
+                if (this.voiceMuted) return;
 
+                // Si el usuario eligió una voz es-MX, ajusta el language automáticamente
+                const lang = (this.serverVoiceName && this.serverVoiceName.startsWith('es-MX')) ? 'es-MX' : 'es-ES';
+
+                const resp = await fetch(`${this.apiUrl}/tts`, {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({
+                    text,
+                    language: lang,
+                    voice_name: this.serverVoiceName || null, // <--- usa la voz elegida
+                    format: 'mp3'
+                  })
+                });
+                if (!resp.ok) throw new Error('TTS server error');
+                const data = await resp.json();
+                if (data.audio_base64 && data.mime) {
+                  const audio = new Audio(`data:${data.mime};base64,${data.audio_base64}`);
+                  await audio.play().catch(()=>{});
+                }
+              } catch (e) {
+                // Fallback: si el servidor TTS falla, usa la voz del navegador
+                if ('speechSynthesis' in window) {
+                  this.speakResponse(text);
+                }
+              }
+            }
 
             setupEventListeners() {
                 this.voiceBtn.addEventListener('click', () => this.toggleVoiceInteraction());
                 this.couple3D.addEventListener('click', () => this.toggleVoiceInteraction());
                 this.settingsBtn.addEventListener('click', () => this.showConfiguration());
                 
+                // Abrir panel de voz
+                if (this.changeVoiceBtn) this.changeVoiceBtn.addEventListener('click', () => this.openVoicePanel());
+
+                // Guardar voz
+                if (this.voiceSaveBtn) this.voiceSaveBtn.addEventListener('click', () => {
+                  this.serverVoiceName  = this.serverVoiceSelect.value || '';
+                  this.browserVoiceName = this.browserVoiceSelect.value || '';
+                  localStorage.setItem('bodabot_serverVoiceName',  this.serverVoiceName);
+                  localStorage.setItem('bodabot_browserVoiceName', this.browserVoiceName);
+                  this.addSystemMessage(`Voz guardada. Servidor: ${this.serverVoiceName || '(predeterminada)'} · Navegador: ${this.browserVoiceName || '(automática)'}`);
+                  this.voicePanel.style.display = 'none';
+                });
+
+                // Cerrar panel
+                if (this.voiceCloseBtn) this.voiceCloseBtn.addEventListener('click', () => {
+                  this.voicePanel.style.display = 'none';
+                });
+
+                // Probar voz del navegador
+                if (this.voiceTestBtn) this.voiceTestBtn.addEventListener('click', () => {
+                  this.speakResponse('Esta es la voz seleccionada para el navegador.');
+                });
+
                 // Efectos visuales
                 this.couple3D.addEventListener('mouseenter', () => {
                     if (!this.isListening && !this.isProcessing) {
@@ -988,6 +1077,31 @@
                 this.promptCategory.addEventListener('change', () => {
                     this.renderPromptChips(this.promptCategory.value);
                 });
+            }
+
+            // Panel de voz
+            openVoicePanel(){
+              if (this.serverVoiceSelect)  this.serverVoiceSelect.value  = this.serverVoiceName || '';
+              if (this.browserVoiceSelect) this.populateBrowserVoices();
+              this.voicePanel.style.display = 'flex';
+            }
+
+            populateBrowserVoices(){
+              if (!('speechSynthesis' in window)) return;
+              const voices = speechSynthesis.getVoices()
+                .filter(v => v.lang.toLowerCase().startsWith('es'));
+              this.browserVoiceSelect.innerHTML = '';
+              const auto = document.createElement('option');
+              auto.value = '';
+              auto.textContent = '(automática en español)';
+              this.browserVoiceSelect.appendChild(auto);
+              voices.forEach(v => {
+                const opt = document.createElement('option');
+                opt.value = v.name;
+                opt.textContent = `${v.name} (${v.lang})`;
+                this.browserVoiceSelect.appendChild(opt);
+              });
+              if (this.browserVoiceName) this.browserVoiceSelect.value = this.browserVoiceName;
             }
 
             // Rellena "Todos" con la unión de categorías (nuevo)
@@ -1233,48 +1347,30 @@
             }
 
             speakResponse(text) {
-                if ('speechSynthesis' in window) {
-                    speechSynthesis.cancel();
-                    
-                    const utterance = new SpeechSynthesisUtterance(text);
-                    utterance.lang = 'es-ES';
-                    utterance.rate = 0.85;
-                    utterance.pitch = 1.1;
-                    utterance.volume = 0.9;
-                    
-                    const voices = speechSynthesis.getVoices();
+                if (!('speechSynthesis' in window)) return;
+                // (el check de mute lo hace el wrapper fuera de la clase)
+                speechSynthesis.cancel();
+                
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'es-ES';
+                utterance.rate = 0.9;
+                utterance.pitch = 1.05;
+                utterance.volume = 0.95;
+                
+                const voices = speechSynthesis.getVoices();
+                let chosen = null;
 
-// Buscar primero voces que sean claramente femeninas
-const preferredFemaleVoices = [
-  "Google español de México",
-  "Google español",
-  "es-ES-Standard-A",
-  "es-ES-Wavenet-C",
-  "es-ES-Wavenet-F",
-  "es-MX-Wavenet-F"
-];
-
-// Encuentra una voz en español que coincida con la lista preferida
-let femaleVoice = voices.find(v =>
-  v.lang.startsWith("es") &&
-  preferredFemaleVoices.some(name => v.name.includes(name))
-);
-
-// Si no encontró, toma la primera voz en español disponible
-if (!femaleVoice) {
-  femaleVoice = voices.find(v => v.lang.startsWith("es"));
-}
-
-if (femaleVoice) {
-  utterance.voice = femaleVoice;
-  console.log("✅ Voz seleccionada:", femaleVoice.name);
-} else {
-  console.warn("⚠️ No se encontró voz en español, se usará la predeterminada.");
-}
-
-                    
-                    speechSynthesis.speak(utterance);
+                // Si el usuario eligió una voz específica del navegador, úsala
+                if (this.browserVoiceName) {
+                  chosen = voices.find(v => v.name === this.browserVoiceName);
                 }
+                // Si no hay guardada, toma la primera en español disponible
+                if (!chosen) {
+                  chosen = voices.find(v => v.lang.toLowerCase().startsWith('es')) || voices[0] || null;
+                }
+                if (chosen) utterance.voice = chosen;
+                
+                speechSynthesis.speak(utterance);
             }
 
             updateStatus(message, type) {
@@ -1471,7 +1567,9 @@ if (femaleVoice) {
             chatBot.initialize();
             
             if ('speechSynthesis' in window) {
+                // Poblar voces cuando estén listas
                 speechSynthesis.addEventListener('voiceschanged', () => {
+                    chatBot.populateBrowserVoices();
                     console.log('Voces disponibles:', speechSynthesis.getVoices().length);
                 });
             }
@@ -1507,7 +1605,7 @@ if (femaleVoice) {
             const muteBtn = document.getElementById('muteBtn');
             const cancelSpeechBtn = document.getElementById('cancelSpeechBtn');
 
-            // Sin tocar el método original dentro de la clase, lo envolvemos
+            // Wrapper para respetar el mute
             const originalSpeak = chatBot.speakResponse;
             chatBot.speakResponse = function(text) {
                 if (this.voiceMuted) return; // no hablar si está en silencio
