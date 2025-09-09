@@ -1214,14 +1214,35 @@
                     utterance.volume = 0.9;
                     
                     const voices = speechSynthesis.getVoices();
-                    const femaleVoice = voices.find(voice => 
-                        voice.lang.startsWith('es') && 
-                        (voice.name.includes('female') || voice.name.includes('mujer'))
-                    );
-                    
-                    if (femaleVoice) {
-                        utterance.voice = femaleVoice;
-                    }
+
+// Buscar primero voces que sean claramente femeninas
+const preferredFemaleVoices = [
+  "Google español de México",
+  "Google español",
+  "es-ES-Standard-A",
+  "es-ES-Wavenet-C",
+  "es-ES-Wavenet-F",
+  "es-MX-Wavenet-F"
+];
+
+// Encuentra una voz en español que coincida con la lista preferida
+let femaleVoice = voices.find(v =>
+  v.lang.startsWith("es") &&
+  preferredFemaleVoices.some(name => v.name.includes(name))
+);
+
+// Si no encontró, toma la primera voz en español disponible
+if (!femaleVoice) {
+  femaleVoice = voices.find(v => v.lang.startsWith("es"));
+}
+
+if (femaleVoice) {
+  utterance.voice = femaleVoice;
+  console.log("✅ Voz seleccionada:", femaleVoice.name);
+} else {
+  console.warn("⚠️ No se encontró voz en español, se usará la predeterminada.");
+}
+
                     
                     speechSynthesis.speak(utterance);
                 }

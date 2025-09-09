@@ -35,9 +35,9 @@ if GOOGLE_APPLICATION_CREDENTIALS:
 
 # CONFIGURACIÓN DIRECTA - VOCES FEMENINAS MODERNAS
 GOOGLE_API_KEY = "AIzaSyAKWV2JvFvIwfKZRKYxLkuahY2aD2UJcUQ"
-LANG_CODE = "es-ES"
-TTS_VOICE = "es-ES-Wavenet-F"  # Voz femenina moderna premium
-TTS_VOICE_FALLBACK = "es-ES-Wavenet-F"  # Voz femenina alternativa premium
+LANG_CODE = "es-MX"
+TTS_VOICE = "es-MX-Wavenet-F"  # Voz femenina mexicana premium
+TTS_VOICE_FALLBACK = "es-MX-Wavenet-F"  # Voz femenina alternativa mexicana
 CORS_ORIGINS = ["https://bodabot-9st7.onrender.com", "http://127.0.0.1:8000"]
 MESA_TIPS_PATH = None
 
