@@ -36,9 +36,9 @@ if GOOGLE_APPLICATION_CREDENTIALS:
 
 # CONFIGURACIÓN DIRECTA - VOCES FEMENINAS MODERNAS
 GOOGLE_API_KEY = "AIzaSyAKWV2JvFvIwfKZRKYxLkuahY2aD2UJcUQ"
-LANG_CODE = "es-MX"
-TTS_VOICE = "es-ES-Neural2-H"       
-TTS_VOICE_FALLBACK = "es-ES-Neural2-H"   
+LANG_CODE = "es-ES"
+TTS_VOICE = "es-ES-Neural2-H"
+TTS_VOICE_FALLBACK = "es-ES-Neural2-H"
 CORS_ORIGINS = ["https://bodabot-9st7.onrender.com", "http://127.0.0.1:8000"]
 MESA_TIPS_PATH = None
 
@@ -1085,9 +1085,9 @@ def strip_emojis_for_tts(text: str) -> str:
     return text
 
 def _choose_voice(language_code: str, voice_name: Optional[str]) -> texttospeech.VoiceSelectionParams:
-    # Prioridad: parámetro explícito > TTS_VOICE > TTS_VOICE_FALLBACK
+    # Prioridad: voice_name del request → TTS_VOICE → TTS_VOICE_FALLBACK
     name = (voice_name or TTS_VOICE or TTS_VOICE_FALLBACK).strip()
-    # Si el nombre incluye locale (p.ej. es-ES-...), úsalo como language_code
+    # Si el nombre ya incluye el prefijo de idioma (p. ej. es-ES-...), úsalo. Si no, toma language_code o LANG_CODE.
     lang_from_name = "-".join(name.split("-")[:2]) if "-" in name else None
     lang = lang_from_name or language_code or LANG_CODE
     return texttospeech.VoiceSelectionParams(language_code=lang, name=name)
@@ -1142,8 +1142,8 @@ class MuteRequest(BaseModel):
 # =========================
 # Endpoints
 # =========================
-@app.get("/")
-def root():
+@app.get("/meta")
+def meta():
     return {
         "name": "BodaBot API (Invitados & Anfitrión)",
         "version": "5.0-sin-emojis",
@@ -1152,9 +1152,35 @@ def root():
             "/invitados/summary", "/invitados/find", "/invitados/{idInvitado}",
             "/ask", "/ask_audio", "/ask_audio_wav",
             "/audio/mute", "/audio/cancel",
-            "/guest/checkin", "/refresh"
+            "/guest/checkin", "/refresh", "/tts"  # 👈 agrega aquí también
         ],
     }
+
+
+class TtsRequest(BaseModel):
+    text: str
+    language: Optional[str] = None
+    voice_name: Optional[str] = None
+    format: Optional[str] = "mp3"  # "mp3" | "wav"
+
+@app.post("/tts")
+def tts(req: TtsRequest):
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="Texto vacío.")
+    lang = req.language or LANG_CODE
+    if req.format == "wav":
+        audio = tts_wav_linear16(req.text, language_code=lang, voice_name=req.voice_name)
+        return {
+            "audio_base64": base64.b64encode(audio).decode("utf-8"),
+            "mime": "audio/wav"
+        }
+    else:
+        audio = tts_mp3(req.text, language_code=lang, voice_name=req.voice_name)
+        return {
+            "audio_base64": base64.b64encode(audio).decode("utf-8"),
+            "mime": "audio/mpeg"
+        }
+
 
 @app.get("/health")
 def health():

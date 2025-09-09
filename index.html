@@ -926,6 +926,34 @@
                 this.promptCategory = document.getElementById('promptCategory');
             }
 
+            async playServerTTS(text) {
+  try {
+    if (this.voiceMuted) return;
+    const resp = await fetch(`${this.apiUrl}/tts`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        text,
+        language: 'es-ES',   // Debe coincidir con LANG_CODE del backend si tu TTS_VOICE es es-ES-...
+        voice_name: null,    // Null para que use TTS_VOICE del backend
+        format: 'mp3'
+      })
+    });
+    if (!resp.ok) throw new Error('TTS server error');
+    const data = await resp.json();
+    if (data.audio_base64 && data.mime) {
+      const audio = new Audio(`data:${data.mime};base64,${data.audio_base64}`);
+      await audio.play().catch(()=>{});
+    }
+  } catch (e) {
+    // Fallback: si el servidor TTS falla, usa la voz del navegador
+    if ('speechSynthesis' in window) {
+      this.speakResponse(text);
+    }
+  }
+}
+
+
             setupEventListeners() {
                 this.voiceBtn.addEventListener('click', () => this.toggleVoiceInteraction());
                 this.couple3D.addEventListener('click', () => this.toggleVoiceInteraction());
@@ -1100,7 +1128,8 @@
                     const data = await response.json();
                     this.hideTypingIndicator();
                     this.addAssistantMessage(data.answer);
-                    this.speakResponse(data.answer);
+                    await this.playServerTTS(data.answer);
+
                     
                 } catch (error) {
                     console.error('Error de API:', error);
