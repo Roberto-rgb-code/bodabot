@@ -983,6 +983,9 @@
 
                 // Ajustar botón de voz según soporte
                 this.refreshVoiceButtonLabel();
+
+                // Estado de voces
+                this.voicesReady = false;
             }
 
             initializeElements() {
@@ -1086,9 +1089,10 @@
                   this.voicePanel.style.display = 'none';
                 });
 
-                // Probar voz del navegador
+                // Probar voz del navegador (usa la voz seleccionada en el combo SIN necesidad de guardar)
                 if (this.voiceTestBtn) this.voiceTestBtn.addEventListener('click', () => {
-                  this.speakResponse('Esta es la voz seleccionada para el navegador.');
+                  const tempName = (this.browserVoiceSelect && this.browserVoiceSelect.value) ? this.browserVoiceSelect.value : (this.browserVoiceName || '');
+                  this.speakResponse('Esta es la voz seleccionada para el navegador.', { voiceName: tempName });
                 });
 
                 // Efectos visuales
@@ -1125,26 +1129,78 @@
             // Panel de voz
             openVoicePanel(){
               if (this.serverVoiceSelect)  this.serverVoiceSelect.value  = this.serverVoiceName || '';
+              // Asegurar que las voces del navegador estén listas y poblar
+              this.ensureVoicesReady();
               if (this.browserVoiceSelect) this.populateBrowserVoices();
               this.voicePanel.style.display = 'flex';
             }
 
-            populateBrowserVoices(){
+            // Garantiza que speechSynthesis tenga voces (desktop/web y móviles)
+            ensureVoicesReady(){
               if (!('speechSynthesis' in window)) return;
-              const voices = speechSynthesis.getVoices()
-                .filter(v => v.lang.toLowerCase().startsWith('es'));
+              const tryLoad = (attempt = 0) => {
+                const list = speechSynthesis.getVoices();
+                if (list && list.length) {
+                  this.voicesReady = true;
+                  this.populateBrowserVoices();
+                  return;
+                }
+                // "Calentamiento" (necesario en iOS/ciertos navegadores)
+                if (attempt === 0) {
+                  try {
+                    const u = new SpeechSynthesisUtterance(' ');
+                    u.volume = 0; u.rate = 1; u.pitch = 1;
+                    speechSynthesis.speak(u);
+                    setTimeout(() => { try { speechSynthesis.cancel(); } catch(e){} }, 60);
+                  } catch(e){}
+                }
+                if (attempt < 20) {
+                  setTimeout(() => tryLoad(attempt + 1), 200);
+                }
+              };
+              tryLoad();
+            }
+
+            populateBrowserVoices(){
+              if (!('speechSynthesis' in window) || !this.browserVoiceSelect) return;
+
+              const all = speechSynthesis.getVoices();
+
+              // Si aún no están listas, mostrar estado y reintentar
+              if (!all || all.length === 0) {
+                this.browserVoiceSelect.innerHTML = '';
+                const loading = document.createElement('option');
+                loading.value = '';
+                loading.textContent = '(cargando voces...)';
+                this.browserVoiceSelect.appendChild(loading);
+                setTimeout(() => this.populateBrowserVoices(), 300);
+                return;
+              }
+
+              // Orden: español primero, luego el resto (para que aparezcan "todas" en web y cel)
+              const es = all.filter(v => (v.lang || '').toLowerCase().startsWith('es'));
+              const rest = all.filter(v => !(v.lang || '').toLowerCase().startsWith('es'));
+              const ordered = es.concat(rest);
+
               this.browserVoiceSelect.innerHTML = '';
               const auto = document.createElement('option');
               auto.value = '';
               auto.textContent = '(automática en español)';
               this.browserVoiceSelect.appendChild(auto);
-              voices.forEach(v => {
+
+              ordered.forEach(v => {
                 const opt = document.createElement('option');
                 opt.value = v.name;
-                opt.textContent = `${v.name} (${v.lang})`;
+                opt.textContent = `${v.name} (${v.lang || 'sin-lang'})`;
                 this.browserVoiceSelect.appendChild(opt);
               });
-              if (this.browserVoiceName) this.browserVoiceSelect.value = this.browserVoiceName;
+
+              // Intentar seleccionar la guardada o dejar automática
+              if (this.browserVoiceName) {
+                this.browserVoiceSelect.value = this.browserVoiceName;
+              } else {
+                this.browserVoiceSelect.value = '';
+              }
             }
 
             // Rellena "Todos" con la unión de categorías (nuevo)
@@ -1482,7 +1538,8 @@
                     .replace(/\n/g, '<br>');
             }
 
-            speakResponse(text) {
+            // Ahora acepta un 2º parámetro opcional para probar una voz específica sin guardar
+            speakResponse(text, opts = {}) {
                 if (!('speechSynthesis' in window)) return;
                 if (this.voiceMuted) return;
                 try { speechSynthesis.cancel(); } catch(e) {}
@@ -1493,16 +1550,16 @@
                 utterance.pitch = 1.05;
                 utterance.volume = 0.95;
                 
+                const preferredName = opts.voiceName || this.browserVoiceName || (this.browserVoiceSelect ? this.browserVoiceSelect.value : '');
                 const voices = speechSynthesis.getVoices();
                 let chosen = null;
 
-                // Si el usuario eligió una voz específica del navegador, úsala
-                if (this.browserVoiceName) {
-                  chosen = voices.find(v => v.name === this.browserVoiceName);
+                if (preferredName) {
+                  chosen = voices.find(v => v.name === preferredName) || null;
                 }
-                // Si no hay guardada, toma la primera en español disponible
+                // Si no hay elección clara, toma alguna en español y, si no, la primera disponible
                 if (!chosen) {
-                  chosen = voices.find(v => v.lang.toLowerCase().startsWith('es')) || voices[0] || null;
+                  chosen = voices.find(v => (v.lang || '').toLowerCase().startsWith('es')) || voices[0] || null;
                 }
                 if (chosen) utterance.voice = chosen;
                 
@@ -1707,6 +1764,8 @@
                 // Poblar voces cuando estén listas
                 const populate = () => chatBot.populateBrowserVoices();
                 speechSynthesis.addEventListener('voiceschanged', populate);
+                // Asegurar carga en web/desktop y móvil
+                chatBot.ensureVoicesReady();
                 setTimeout(populate, 300); // fallback por si no dispara el evento
             }
             
@@ -1743,9 +1802,9 @@
 
             // Wrapper para respetar el mute
             const originalSpeak = chatBot.speakResponse.bind(chatBot);
-            chatBot.speakResponse = function(text) {
+            chatBot.speakResponse = function(text, opts) {
                 if (this.voiceMuted) return; // no hablar si está en silencio
-                return originalSpeak(text);
+                return originalSpeak(text, opts);
             };
 
             // Sincroniza texto del botón Mute
