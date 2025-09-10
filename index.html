@@ -683,15 +683,16 @@
             cursor: pointer;
         }
 
-        /* Voice panel */
+        /* Voice panel (mejorado para web y cel) */
         .voice-panel{
           position:fixed; inset:0; background:rgba(0,0,0,.25);
           backdrop-filter: blur(2px);
           display:none; align-items:center; justify-content:center;
-          z-index:1000;
+          z-index:1000; padding:12px;
         }
         .voice-panel-card{
-          width:min(520px,92vw);
+          width:min(720px,96vw);
+          max-height:92vh; overflow:auto; -webkit-overflow-scrolling:touch;
           background:#fff; border-radius:18px; padding:24px;
           box-shadow:0 20px 60px rgba(139,95,191,.25);
           border:1px solid rgba(139,95,191,.2);
@@ -702,7 +703,8 @@
           width:100%; padding:12px; border-radius:12px;
           border:1px solid rgba(139,95,191,.25); background:#fff;
         }
-        .voice-actions{ display:flex; gap:10px; margin-top:16px; }
+        .voice-actions{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:16px; }
+        @media (max-width:480px){ .voice-actions{ grid-template-columns:1fr; } }
 
         /* Responsive Design */
         @media (max-width: 1200px) {
@@ -902,15 +904,29 @@
     <script>
         class PremiumWeddingChatBot {
             constructor() {
-                this.isListening = false;
+                this.isListening = false;   // Web Speech
+                this.isRecording = false;   // MediaRecorder
                 this.isProcessing = false;
                 this.apiUrl = window.location.origin;
                 this.conversationHistory = [];
+                this.media = { stream:null, recorder:null, chunks:[] };
 
                 // Persistencia de voces seleccionadas
                 this.serverVoiceName  = localStorage.getItem('bodabot_serverVoiceName')  || '';
                 this.browserVoiceName = localStorage.getItem('bodabot_browserVoiceName') || '';
                 
+                // Detección de dispositivo/soporte
+                this.isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                this.supportsWebSpeech = 'webkitSpeechRecognition' in window && !this.isIOS; // iOS no soporta
+                this.supportsMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+                this.voiceMode = this.supportsWebSpeech ? 'webspeech' : (this.supportsMediaRecorder ? 'record' : 'none');
+
+                // Para desbloquear audio en iOS
+                this.didUserInteract = false;
+                const unlock = () => { this.didUserInteract = true; document.removeEventListener('touchstart', unlock, {passive:true}); document.removeEventListener('click', unlock); };
+                document.addEventListener('touchstart', unlock, { passive:true });
+                document.addEventListener('click', unlock);
+
                 // Prompts sugeridos por categoría (nuevo)
                 this.PROMPTS = {
                     "Básicos": [
@@ -964,6 +980,9 @@
                 this.startAmbientEffects();
                 this.prepareAllPrompts(); // nuevo
                 this.renderPromptChips(); // nuevo
+
+                // Ajustar botón de voz según soporte
+                this.refreshVoiceButtonLabel();
             }
 
             initializeElements() {
@@ -989,6 +1008,17 @@
                 this.voiceTestBtn       = document.getElementById('voiceTestBtn');
             }
 
+            refreshVoiceButtonLabel() {
+                if (!this.voiceBtn) return;
+                if (this.voiceMode === 'webspeech') {
+                    this.voiceBtn.textContent = this.isListening ? '🛑 Detener' : '🎤 Hacer Consulta';
+                } else if (this.voiceMode === 'record') {
+                    this.voiceBtn.textContent = this.isRecording ? '⏹️ Detener grabación' : '🎙️ Grabar consulta';
+                } else {
+                    this.voiceBtn.textContent = '⌨️ Escribir consulta';
+                }
+            }
+
             async playServerTTS(text) {
               try {
                 if (this.voiceMuted) return;
@@ -1010,7 +1040,9 @@
                 const data = await resp.json();
                 if (data.audio_base64 && data.mime) {
                   const audio = new Audio(`data:${data.mime};base64,${data.audio_base64}`);
-                  await audio.play().catch(()=>{});
+                  if (this.didUserInteract) {
+                    await audio.play().catch(()=>{});
+                  }
                 }
               } catch (e) {
                 // Fallback: si el servidor TTS falla, usa la voz del navegador
@@ -1021,8 +1053,19 @@
             }
 
             setupEventListeners() {
-                this.voiceBtn.addEventListener('click', () => this.toggleVoiceInteraction());
-                this.couple3D.addEventListener('click', () => this.toggleVoiceInteraction());
+                // Botón principal de voz: maneja ambos modos (webspeech o grabación)
+                const onVoiceButton = () => {
+                    if (this.voiceMode === 'webspeech') {
+                        this.toggleVoiceInteraction();
+                    } else if (this.voiceMode === 'record') {
+                        this.toggleRecording();
+                    } else {
+                        this.addSystemMessage('Tu navegador no soporta reconocimiento de voz. Usa el teclado o agrega un endpoint /stt en tu backend.');
+                    }
+                };
+
+                this.voiceBtn.addEventListener('click', onVoiceButton);
+                this.couple3D.addEventListener('click', onVoiceButton);
                 this.settingsBtn.addEventListener('click', () => this.showConfiguration());
                 
                 // Abrir panel de voz
@@ -1149,33 +1192,53 @@
                 return `✨ ${text}`;
             }
 
+            /* ===============================
+               RECONOCIMIENTO DE VOZ / GRABACIÓN
+               =============================== */
             setupSpeechRecognition() {
-                if ('webkitSpeechRecognition' in window) {
-                    this.recognition = new webkitSpeechRecognition();
-                    this.recognition.lang = 'es-ES';
-                    this.recognition.interimResults = false;
-                    this.recognition.maxAlternatives = 1;
-                    this.recognition.continuous = false;
+                if (this.supportsWebSpeech) {
+                    try {
+                        this.recognition = new webkitSpeechRecognition();
+                        this.recognition.lang = 'es-ES';
+                        this.recognition.interimResults = false;
+                        this.recognition.maxAlternatives = 1;
+                        this.recognition.continuous = false;
 
-                    this.recognition.onresult = (event) => {
-                        const transcript = event.results[0][0].transcript;
-                        this.addUserMessage(transcript);
-                        this.processUserQuery(transcript);
-                    };
+                        this.recognition.onresult = (event) => {
+                            const transcript = event.results[0][0].transcript;
+                            this.addUserMessage(transcript);
+                            this.processUserQuery(transcript);
+                        };
 
-                    this.recognition.onerror = (event) => {
-                        this.handleError(`Error de reconocimiento: ${event.error}`);
-                    };
+                        this.recognition.onerror = (event) => {
+                            this.handleError(`Error de reconocimiento: ${event.error}`);
+                        };
 
-                    this.recognition.onend = () => {
-                        this.stopListening();
-                    };
+                        this.recognition.onend = () => {
+                            this.stopListening();
+                        };
+                    } catch (e) {
+                        // Si falla, cae a grabación
+                        this.supportsWebSpeech = false;
+                        if (this.supportsMediaRecorder) this.voiceMode = 'record';
+                        this.refreshVoiceButtonLabel();
+                    }
                 } else {
-                    this.handleError('Reconocimiento de voz no disponible en este navegador');
+                    // No mostrar error aquí: usamos fallback a grabación si existe
+                    if (this.supportsMediaRecorder) {
+                        this.voiceMode = 'record';
+                    } else {
+                        this.voiceMode = 'none';
+                    }
+                    this.refreshVoiceButtonLabel();
                 }
             }
 
             toggleVoiceInteraction() {
+                if (!this.recognition) {
+                    this.handleError('Reconocimiento de voz no disponible');
+                    return;
+                }
                 if (this.isListening) {
                     this.stopListening();
                 } else {
@@ -1205,8 +1268,8 @@
             stopListening() {
                 this.isListening = false;
                 this.couple3D.classList.remove('listening');
-                this.voiceBtn.textContent = '🎤 Hacer Consulta';
                 this.voiceBtn.style.background = '';
+                this.refreshVoiceButtonLabel();
                 this.updateStatus('✨ Listo para ayudarte con tu boda soñada', '');
 
                 if (this.recognition) {
@@ -1215,6 +1278,79 @@
                     } catch (error) {
                         console.warn('Error al detener reconocimiento:', error);
                     }
+                }
+            }
+
+            /* ======= Fallback: Grabación a /stt (para iOS u otros) ======= */
+            async toggleRecording(){
+                if (!this.supportsMediaRecorder) { 
+                    this.handleError('Grabación no soportada en este navegador');
+                    return;
+                }
+                if (this.isRecording) {
+                    await this.stopRecording(true);
+                } else {
+                    await this.startRecording();
+                }
+            }
+
+            async startRecording(){
+                try{
+                    this.media.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:true, noiseSuppression:true }});
+                    let mime = '';
+                    if (MediaRecorder.isTypeSupported('audio/webm')) mime = 'audio/webm';
+                    else if (MediaRecorder.isTypeSupported('audio/mp4')) mime = 'audio/mp4';
+                    else if (MediaRecorder.isTypeSupported('audio/ogg')) mime = 'audio/ogg';
+
+                    this.media.recorder = new MediaRecorder(this.media.stream, mime ? { mimeType: mime } : undefined);
+                    this.media.chunks = [];
+                    this.media.recorder.ondataavailable = (e)=>{ if (e.data && e.data.size>0) this.media.chunks.push(e.data); };
+                    this.media.recorder.onstop = async ()=>{
+                        const blob = new Blob(this.media.chunks, { type: mime || 'audio/webm' });
+                        await this.sendAudioToSTT(blob);
+                        (this.media.stream.getTracks()||[]).forEach(t=>t.stop());
+                        this.media.stream = null; this.media.recorder = null; this.media.chunks = [];
+                    };
+
+                    this.isRecording = true;
+                    this.couple3D.classList.add('listening');
+                    this.updateStatus('🎙️ Grabando... toca de nuevo para detener', 'listening');
+                    this.refreshVoiceButtonLabel();
+                    this.media.recorder.start();
+                }catch(e){
+                    this.handleError('No se pudo acceder al micrófono. Revisa permisos.');
+                }
+            }
+
+            async stopRecording(userRequested=false){
+                if (!this.isRecording) return;
+                this.isRecording = false;
+                this.couple3D.classList.remove('listening');
+                this.updateStatus('Procesando tu audio...', 'processing');
+                this.refreshVoiceButtonLabel();
+                try{ this.media.recorder && this.media.recorder.stop(); }catch{}
+            }
+
+            async sendAudioToSTT(blob){
+                // Requiere endpoint /stt que devuelva { text } o { transcript }
+                try{
+                    const fd = new FormData();
+                    fd.append('file', blob, `input.${(blob.type.split('/')[1]||'webm')}`);
+                    fd.append('mime', blob.type || 'audio/webm');
+
+                    const resp = await fetch(`${this.apiUrl}/stt`, { method:'POST', body: fd });
+                    if (!resp.ok) throw new Error('STT server error');
+                    const data = await resp.json();
+                    const text = (data && (data.text || data.transcript)) || '';
+                    if (!text){
+                        this.addSystemMessage('No se detectó voz en el audio.');
+                        this.updateStatus('✨ Listo para ayudarte con tu boda soñada','');
+                        return;
+                    }
+                    this.addUserMessage(text);
+                    await this.processUserQuery(text);
+                }catch(e){
+                    this.handleError('No es posible convertir tu audio a texto. ¿Tienes /stt activo en el backend?');
                 }
             }
 
@@ -1336,7 +1472,7 @@
             }
 
             formatResponseText(text) {
-                return text
+                return (text || '')
                     .replace(/\*\*(.*?)\*\*/g, '<strong style="color: var(--primary-purple); font-weight: 600;">$1</strong>')
                     .replace(/\*(.*?)\*/g, '<em style="color: var(--dark-purple); font-style: italic;">$1</em>')
                     .replace(/•/g, '<span style="color: var(--primary-purple); font-weight: bold;">•</span>')
@@ -1348,8 +1484,8 @@
 
             speakResponse(text) {
                 if (!('speechSynthesis' in window)) return;
-                // (el check de mute lo hace el wrapper fuera de la clase)
-                speechSynthesis.cancel();
+                if (this.voiceMuted) return;
+                try { speechSynthesis.cancel(); } catch(e) {}
                 
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = 'es-ES';
@@ -1370,7 +1506,7 @@
                 }
                 if (chosen) utterance.voice = chosen;
                 
-                speechSynthesis.speak(utterance);
+                try { speechSynthesis.speak(utterance); } catch(e) {}
             }
 
             updateStatus(message, type) {
@@ -1380,7 +1516,8 @@
 
             handleError(message) {
                 this.updateStatus(`❌ ${message}`, 'error');
-                this.stopListening();
+                if (this.isListening) this.stopListening();
+                if (this.isRecording) this.stopRecording(false);
                 this.clearProcessingState();
                 this.hideTypingIndicator();
                 
@@ -1568,10 +1705,9 @@
             
             if ('speechSynthesis' in window) {
                 // Poblar voces cuando estén listas
-                speechSynthesis.addEventListener('voiceschanged', () => {
-                    chatBot.populateBrowserVoices();
-                    console.log('Voces disponibles:', speechSynthesis.getVoices().length);
-                });
+                const populate = () => chatBot.populateBrowserVoices();
+                speechSynthesis.addEventListener('voiceschanged', populate);
+                setTimeout(populate, 300); // fallback por si no dispara el evento
             }
             
             window.addEventListener('beforeunload', () => {
@@ -1588,10 +1724,10 @@
                 }
             });
 
-            const originalAddUserMessage = chatBot.addUserMessage;
+            const originalAddUserMessage = chatBot.addUserMessage.bind(chatBot);
             chatBot.addUserMessage = function(text) {
                 this.removeWelcomeMessage();
-                return originalAddUserMessage.call(this, text);
+                return originalAddUserMessage(text);
             };
 
             /* =====================
@@ -1606,10 +1742,10 @@
             const cancelSpeechBtn = document.getElementById('cancelSpeechBtn');
 
             // Wrapper para respetar el mute
-            const originalSpeak = chatBot.speakResponse;
+            const originalSpeak = chatBot.speakResponse.bind(chatBot);
             chatBot.speakResponse = function(text) {
                 if (this.voiceMuted) return; // no hablar si está en silencio
-                return originalSpeak.call(this, text);
+                return originalSpeak(text);
             };
 
             // Sincroniza texto del botón Mute
@@ -1636,8 +1772,9 @@
                     try {
                         if ('speechSynthesis' in window) speechSynthesis.cancel();
                     } catch (e) {}
-                    chatBot.stopListening(); // por si estaba escuchando
-                    chatBot.updateStatus('🛑 Reproducción detenida', '');
+                    if (chatBot.isListening) chatBot.stopListening(); // por si estaba escuchando
+                    if (chatBot.isRecording) chatBot.stopRecording(true); // por si estaba grabando
+                    chatBot.updateStatus('🛑 Reproducción/Grabación detenida', '');
                     chatBot.addSystemMessage('⏹️ Voz detenida.');
                 });
             }
